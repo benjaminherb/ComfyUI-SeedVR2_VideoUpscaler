@@ -5,6 +5,12 @@ Standalone SeedVR2 Video Upscaler CLI Script
 
 import sys
 import os
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+
 import argparse
 import time
 import multiprocessing as mp
@@ -232,7 +238,7 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
     # ensure model weights present (each process checks but very fast if already downloaded)
     if shared_args["debug"]:
         print(f"🔄 Configuring runner for device {device_id}")
-    runner = configure_runner(model_name, model_dir, shared_args["preserve_vram"], shared_args["debug"])
+    runner = configure_runner(model_name, model_dir, shared_args["preserve_vram"], shared_args["debug"], block_swap_config=shared_args["block_swap_config"])
 
     # Run generation
     result_tensor = generation_loop(
@@ -245,6 +251,7 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
         preserve_vram=shared_args["preserve_vram"],
         temporal_overlap=shared_args["temporal_overlap"],
         debug=shared_args["debug"],
+        block_swap_config = shared_args["block_swap_config"]
     )
 
     # Send back result as numpy array to avoid CUDA transfers
@@ -271,6 +278,13 @@ def _gpu_processing(frames_tensor, device_list, args):
         "res_w": args.resolution,
         "batch_size": args.batch_size,
         "temporal_overlap": 0,
+        "block_swap_config": {
+            'blocks_to_swap': args.blocks_to_swap,
+            'use_none_blocking': args.use_none_blocking,
+            'offload_io_components': args.offload_io_components,
+            'cache_model': False,
+            'enable_debug': True
+        },
     }
 
     for idx, (device_id, chunk_tensor) in enumerate(zip(device_list, chunks)):
@@ -332,6 +346,12 @@ def parse_arguments():
                         help="Enable debug logging")
     parser.add_argument("--cuda_device", type=str, default=None,
                         help="CUDA device id(s). Single id (e.g., '0') or comma-separated list '0,1' for multi-GPU")
+    parser.add_argument("--blocks_to_swap", type=int, default=0,
+                        help="Number of blocks to swap for VRAM optimization (default: 0, disabled), up to 32 for 3B model, 36 for 7B")
+    parser.add_argument("--use_none_blocking", action="store_true",
+                        help="Use non-blocking memory transfers for VRAM optimization")
+    parser.add_argument("--offload_io_components", action="store_true",
+                        help="Offload IO components to CPU for VRAM optimization")
     
     return parser.parse_args()
 
