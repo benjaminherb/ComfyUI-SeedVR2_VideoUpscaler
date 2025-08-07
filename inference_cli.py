@@ -5,15 +5,18 @@ Standalone SeedVR2 Video Upscaler CLI Script
 
 import sys
 import os
+import argparse
+import time
+import multiprocessing as mp
 
+# Set up path before any other imports to fix module resolution
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
+# Set environment variable so all spawned processes can find modules
+os.environ['PYTHONPATH'] = script_dir + ':' + os.environ.get('PYTHONPATH', '')
 
-import argparse
-import time
-import multiprocessing as mp
 # Ensure safe CUDA usage with multiprocessing
 if mp.get_start_method(allow_none=True) != 'spawn':
     mp.set_start_method('spawn', force=True)
@@ -40,13 +43,6 @@ from datetime import datetime
 from pathlib import Path
 from src.utils.downloads import download_weight
 
-# Add project root to sys.path for src module imports
-script_dir = os.path.dirname(os.path.abspath(__file__))
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
-root_dir = os.path.join(script_dir, '..', '..')
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
 
 def extract_frames_from_video(video_path, debug=False, skip_first_frames=0, load_cap=None):
     """
