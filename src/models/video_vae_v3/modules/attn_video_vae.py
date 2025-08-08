@@ -1278,7 +1278,14 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             z = z.unsqueeze(2)
 
         b, c, f, h, w = z.shape
-        f = temporal_tile_size
+        
+        if hasattr(self, 'temporal_downsample_factor'):
+            # For VideoAutoencoderKLWrapper
+            temporal_scale_factor = self.temporal_downsample_factor
+        else:
+            # For base VideoAutoencoderKL, use temporal_scale_num (2^temporal_scale_num is the factor)
+            temporal_scale_num = getattr(self, 'temporal_scale_num', 2)
+            temporal_scale_factor = 2 ** temporal_scale_num
 
         # --- THIS IS THE FIX FOR THE CRASH ---
         scale_factor = self.spatial_downsample_factor
@@ -1286,13 +1293,15 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
         output_h = h * scale_factor
         output_w = w * scale_factor
+        output_f = f * temporal_scale_factor
 
         latent_tile_size = tile_size // scale_factor
         latent_tile_overlap = tile_overlap // scale_factor
+        latent_temporal_tile_size = temporal_tile_size // temporal_scale_factor
 
         # Disable temporal tiling if tile size is 0 or larger than the number of frames
-        if temporal_tile_size == 0 or temporal_tile_size >= f:
-            temporal_tile_size = f
+        if latent_temporal_tile_size == 0 or latent_temporal_tile_size >= f:
+            latent_temporal_tile_size = f
 
         blend_mask = torch.ones((1, 1, 1, tile_size, tile_size), device=z.device, dtype=z.dtype)
         for i in range(tile_overlap):
@@ -1302,31 +1311,37 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             blend_mask[..., :, -1-i] *= fade
             blend_mask[..., -1-i, :] *= fade
 
-        result = torch.zeros((b, self.out_channels, f, output_h, output_w), device=z.device, dtype=z.dtype)
+        result = torch.zeros((b, self.out_channels, output_f, output_h, output_w), device=z.device, dtype=z.dtype)
         count = torch.zeros_like(result)
 
         # Outer loop for temporal chunks
-        for t_start in range(0, f, temporal_tile_size):
-            t_end = min(t_start + temporal_tile_size, f)
-            print(f"   Decoding temporal chunk: frames {t_start} to {t_end}")
+        for t_start in range(0, f, latent_temporal_tile_size):
+            t_end = min(t_start + latent_temporal_tile_size, f)
+            self.debug.log(f"Decoding temporal chunk: frames {t_start} to {t_end}", category="vae")
 
             # Inner loops for spatial tiles (your existing logic)
             stride_h = latent_tile_size - latent_tile_overlap
             stride_w = latent_tile_size - latent_tile_overlap
+            num_tiles = ((h - latent_tile_overlap) // stride_h + 1) * ((w - latent_tile_overlap) // stride_w + 1)
+            tile_id = 0
 
             for y in range(0, h, stride_h):
                 for x in range(0, w, stride_w):
-                    self.debug.log(f"Decoding tile at position: (y={y}, x={x})", category="vae")
+                    tile_id += 1
+
                     y_end = min(y + latent_tile_size, h)
                     x_end = min(x + latent_tile_size, w)
 
                     # Slice the latent tensor in all 3 dimensions (T, H, W)
                     tile_latent = z[:, :, t_start:t_end, y:y_end, x:x_end]
 
+                    self.debug.log(f"Decoding tile {tile_id} / {num_tiles} (Shape: {tile_latent.shape})", category="vae")
+
                     # The _decode method is the base, non-slicing/tiling version.
                     decoded_tile = self._decode(tile_latent, memory_state=MemoryState.DISABLED)
 
-                    out_t_start, out_t_end = t_start, t_end
+                    out_t_start = t_start * temporal_scale_factor
+                    out_t_end = t_end * temporal_scale_factor
                     out_y, out_y_end = y * scale_factor, y_end * scale_factor
                     out_x, out_x_end = x * scale_factor, x_end * scale_factor
 
