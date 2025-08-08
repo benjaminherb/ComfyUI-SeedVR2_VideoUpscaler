@@ -113,7 +113,7 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None):
         
         if debug.enabled and frames_loaded % 100 == 0:
             total_to_load = min(frame_count, load_cap) if load_cap else frame_count
-            debug.log(f"📹 Extracted {frames_loaded}/{total_to_load} frames", category="file")
+            debug.log(f"Extracted {frames_loaded}/{total_to_load} frames", category="file")
     
     cap.release()
     
@@ -125,7 +125,7 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None):
     # Convert to tensor [T, H, W, C] and cast to Float16 for ComfyUI compatibility
     frames_tensor = torch.from_numpy(np.stack(frames)).to(torch.float16)
     
-    debug.log(f"📊 Frames tensor shape: {frames_tensor.shape}, dtype: {frames_tensor.dtype}", category="memory")
+    debug.log(f"Frames tensor shape: {frames_tensor.shape}, dtype: {frames_tensor.dtype}", category="memory")
 
     return frames_tensor, fps
 
@@ -214,7 +214,6 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
     from src.core.model_manager import configure_runner
     from src.core.generation import generation_loop
     
-
     # Reconstruct frames tensor
     frames_tensor = torch.from_numpy(frames_np).to(torch.float16)
 
@@ -223,7 +222,7 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
     model_name = shared_args["model"]
     # ensure model weights present (each process checks but very fast if already downloaded)
     debug.log(f"Configuring runner for device {device_id}", category="general")
-    runner = configure_runner(model_name, model_dir, shared_args["preserve_vram"], shared_args["debug"], block_swap_config=shared_args["block_swap_config"])
+    runner = configure_runner(model_name, model_dir, shared_args["preserve_vram"], debug, block_swap_config=shared_args["block_swap_config"])
 
     # Run generation
     result_tensor = generation_loop(
@@ -235,7 +234,7 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
         batch_size=shared_args["batch_size"],
         preserve_vram=shared_args["preserve_vram"],
         temporal_overlap=shared_args["temporal_overlap"],
-        debug=Debug(enabled=shared_args["debug"]),
+        debug=debug,
         block_swap_config=shared_args["block_swap_config"]
     )
 
@@ -334,6 +333,8 @@ def parse_arguments():
                         help="Number of blocks to swap for VRAM optimization (default: 0, disabled), up to 32 for 3B model, 36 for 7B")
     parser.add_argument("--use_none_blocking", action="store_true",
                         help="Use non-blocking memory transfers for VRAM optimization")
+    parser.add_argument("--cache_model", action="store_true",
+                        help="Cache model weights in memory to avoid reloading")
     parser.add_argument("--offload_io_components", action="store_true",
                         help="Offload IO components to CPU for VRAM optimization")
     
@@ -350,7 +351,7 @@ def main():
     
     debug.log("Arguments:", category="setup")
     for key, value in vars(args).items():
-        debug.log(f"\t{key}: {value}", category="none")
+        debug.log(f"  {key}: {value}", category="none")
     
     # Show actual CUDA device visibility
     debug.log(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set (all)')}", category="device")
