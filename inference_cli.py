@@ -214,6 +214,9 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
     from src.core.model_manager import configure_runner
     from src.core.generation import generation_loop
     
+    # Create debug instance for this worker process
+    worker_debug = Debug(enabled=shared_args["debug"])
+    
     # Reconstruct frames tensor
     frames_tensor = torch.from_numpy(frames_np).to(torch.float16)
 
@@ -221,8 +224,8 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
     model_dir = shared_args["model_dir"]
     model_name = shared_args["model"]
     # ensure model weights present (each process checks but very fast if already downloaded)
-    debug.log(f"Configuring runner for device {device_id}", category="general")
-    runner = configure_runner(model_name, model_dir, shared_args["preserve_vram"], debug, block_swap_config=shared_args["block_swap_config"])
+    worker_debug.log(f"Configuring runner for device {device_id}", category="general")
+    runner = configure_runner(model_name, model_dir, shared_args["preserve_vram"], worker_debug, block_swap_config=shared_args["block_swap_config"])
 
     # Run generation
     result_tensor = generation_loop(
@@ -234,7 +237,7 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
         batch_size=shared_args["batch_size"],
         preserve_vram=shared_args["preserve_vram"],
         temporal_overlap=shared_args["temporal_overlap"],
-        debug=debug,
+        debug=worker_debug,
         block_swap_config=shared_args["block_swap_config"]
     )
 
