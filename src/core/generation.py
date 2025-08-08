@@ -336,10 +336,6 @@ def generation_loop(runner, images, cfg_scale=1.0, seed=666, res_w=720, batch_si
     #images = images.to("cpu")
     #print(f"🔄 Images to CPU time: {time.time() - t} seconds")
     
-    # Keep previous batch tensors for temporal blending
-    prev_sample_tchw = None
-    prev_input_video_tchw = None
-    
     try:
         # Main processing loop with context awareness
         for batch_count, batch_idx in enumerate(range(0, len(images), step)):
@@ -422,36 +418,25 @@ def generation_loop(runner, images, cfg_scale=1.0, seed=666, res_w=720, batch_si
             #if temporal_overlap > 0 and not is_first_batch and sample.shape[0] > effective_batch_size - temporal_overlap:
             #    sample = sample[temporal_overlap:]  # Remove overlap frames from output
             
-            # prepare for color correction and enable temporal blending
+            # Apply color correction if available
             debug.start_timer("video_to_device")
             transformed_video = transformed_video.to(device)
             debug.end_timer("video_to_device", "Transformed video to device")
-            current_input_video_tchw = optimized_single_video_rearrange(transformed_video)
+            
+            input_video = [optimized_single_video_rearrange(transformed_video)]
             del transformed_video
-            
-            # temporal latent blending 
-            if prev_sample_tchw is not None and temporal_overlap > 0:
-                blend_n = min(temporal_overlap, prev_sample_tchw.shape[0], sample.shape[0])
-                if blend_n > 0:
-                    blended = temporal_latent_blending(prev_sample_tchw[-blend_n:], sample[:blend_n], blend_n)
-                    prev_sample_tchw[-blend_n:] = blended
-                    sample[:blend_n] = blended
-                # drop overlapped frames from current to avoid duplicates later
-                if sample.shape[0] > temporal_overlap:
-                    sample = sample[temporal_overlap:]
-            
-            # Previous batch after blending
-            if prev_sample_tchw is not None:
-                prev_out = wavelet_reconstruction(prev_sample_tchw, prev_input_video_tchw[:prev_sample_tchw.size(0)], debug)
-                prev_out = optimized_sample_to_image_format(prev_out)
-                prev_out = prev_out.clip(-1, 1).mul_(0.5).add_(0.5)
-                prev_out_cpu = prev_out.to(torch.float16).to("cpu")
-                del prev_out
-                batch_samples.append(prev_out_cpu)
-            
-            # For next iteration
-            prev_sample_tchw = sample
-            prev_input_video_tchw = current_input_video_tchw
+            #transformed_video = transformed_video.to("cpu")
+            #del transformed_video
+            sample = wavelet_reconstruction(sample, input_video[0][:sample.size(0)], debug)
+            del input_video
+
+            # Convert to final image format
+            sample = optimized_sample_to_image_format(sample)
+            sample = sample.clip(-1, 1).mul_(0.5).add_(0.5)
+            sample_cpu = sample.to(torch.float16).to("cpu")
+            del sample
+            batch_samples.append(sample_cpu)
+            #del sample 
             
             # Aggressive cleanup after each batch
             # tps = time.time()
@@ -468,15 +453,6 @@ def generation_loop(runner, images, cfg_scale=1.0, seed=666, res_w=720, batch_si
             # Log memory state at the end of each batch
             debug.log_memory_state(f"Batch {batch_number} - Memory")
             debug.end_timer(f"batch_{batch_number}", f"Batch {batch_number} processed", show_breakdown=True)
-
-        # After loop, finalize the last pending batch
-        if prev_sample_tchw is not None:
-            last_out = wavelet_reconstruction(prev_sample_tchw, prev_input_video_tchw[:prev_sample_tchw.size(0)], debug)
-            last_out = optimized_sample_to_image_format(last_out)
-            last_out = last_out.clip(-1, 1).mul_(0.5).add_(0.5)
-            last_out_cpu = last_out.to(torch.float16).to("cpu")
-            del last_out
-            batch_samples.append(last_out_cpu)
 
     finally:
         debug.log("", category="none")
@@ -676,4 +652,4 @@ def calculate_optimal_batch_params(total_frames, batch_size, temporal_overlap):
         'best_batch': best_batch,
         'padding_waste': padding_waste,
         'is_optimal': batch_size in optimal_batches
-    }
+    } 

@@ -203,6 +203,46 @@ def save_frames_to_png(frames_tensor, output_dir, base_name):
     debug.log(f"PNG saving completed: {total} files in '{output_dir}'", category="success")
 
 
+def apply_temporal_overlap_blending(frames_tensor, batch_size, overlap):
+    """
+    Blend frames with temporal overlap to avoid visible jumps.
+
+    Args:
+        frames_tensor (torch.Tensor): [T, H, W, C], Float16 in [0,1]
+        batch_size (int): Frames per batch used during generation
+        overlap (int): Overlapping frames between consecutive batches
+
+    Returns:
+        torch.Tensor: Blended frames [T, H, W, C]
+    """
+    T = frames_tensor.shape[0]
+    if overlap <= 0 or batch_size <= overlap or T <= overlap:
+        return frames_tensor
+
+    step = batch_size - overlap
+    out_chunks = []
+
+    for start in range(0, T, step):
+        end = min(start + batch_size, T)
+        batch = frames_tensor[start:end]
+        if start == 0:
+            out_chunks.append(batch)
+            continue
+
+        # Blend overlap with the end of previous chunk
+        prev = out_chunks[-1]
+        k = min(overlap, prev.shape[0], batch.shape[0])
+        if k > 0:
+            blended = (prev[-k:] + batch[:k]) * 0.5
+            out_chunks[-1] = torch.cat([prev[:-k], blended], dim=0)
+            # Append non-overlapping frames
+            out_chunks.append(batch[k:])
+        else:
+            out_chunks.append(batch)
+
+    return torch.cat(out_chunks, dim=0)
+
+
 def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
     """Worker process that performs upscaling on a slice of frames using a dedicated GPU."""
     # 1. Limit CUDA visibility to the chosen GPU BEFORE importing torch-heavy deps
@@ -311,7 +351,7 @@ def parse_arguments():
     parser.add_argument("--resolution", type=int, default=1072,
                         help="Target resolution of the short side (default: 1072)")
     parser.add_argument("--batch_size", type=int, default=1,
-                        help="Number of frames per batch (default: 5)")
+                        help="Number of frames per batch (default: 1)")
     parser.add_argument("--model", type=str, default="seedvr2_ema_3b_fp8_e4m3fn.safetensors",
                         choices=[
                             "seedvr2_ema_3b_fp16.safetensors",
@@ -390,7 +430,7 @@ def main():
         )
         
         debug.log(f"Frame extraction time: {time.time() - start_time:.2f}s", category="general")
-        # debug.log(f"📊 Initial VRAM: {torch.cuda.memory_allocated() / 1024**3:.2f}GB", category="memory")
+        # debug.log(f"Initial VRAM: {torch.cuda.memory_allocated() / 1024**3:.2f}GB", category="memory")
 
         # Parse GPU list
         device_list = [d.strip() for d in str(args.cuda_device).split(',') if d.strip()] if args.cuda_device else ["0"]
@@ -402,6 +442,10 @@ def main():
         
         debug.log(f"Generation time: {generation_time:.2f}s", category="general")
         debug.log(f"Peak VRAM usage: {torch.cuda.max_memory_allocated() / 1024**3:.2f}GB", category="memory")
+
+        if args.temporal_overlap > 0:
+            debug.log(f"Applying temporal overlap with blending", category="generation")
+            result = apply_temporal_overlap_blending(result, args.batch_size, args.temporal_overlap)
         debug.log(f"Result shape: {result.shape}, dtype: {result.dtype}", category="memory")
         
         # After generation_time calculation, choose saving method
@@ -443,4 +487,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
