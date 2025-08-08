@@ -266,7 +266,7 @@ def _gpu_processing(frames_tensor, device_list, args):
             'blocks_to_swap': args.blocks_to_swap,
             'use_none_blocking': args.use_none_blocking,
             'offload_io_components': args.offload_io_components,
-            'cache_model': False,
+            'cache_model': args.cache_model,
         },
     }
 

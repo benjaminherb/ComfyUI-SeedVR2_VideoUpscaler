@@ -84,7 +84,11 @@ def configure_runner(model, base_cache_dir, preserve_vram=False, debug=None,
         
         # Check if blockswap needs to be applied
         blockswap_needed = block_swap_config and block_swap_config.get("blocks_to_swap", 0) > 0
-        
+
+        # Sets _blockswap_active for CLI usage
+        if blockswap_needed and not hasattr(cached_runner, "_blockswap_active"):
+            cached_runner._blockswap_active = True
+
         if blockswap_needed:
             # Check if we have cached configuration
             has_cached_config = hasattr(cached_runner, "_cached_blockswap_config")
