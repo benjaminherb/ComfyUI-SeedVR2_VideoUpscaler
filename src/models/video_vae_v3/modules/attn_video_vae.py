@@ -1278,82 +1278,104 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             z = z.unsqueeze(2)
 
         b, c, f, h, w = z.shape
-        
+
+        # Determine temporal scale factor (output/latent)
         if hasattr(self, 'temporal_downsample_factor'):
-            # For VideoAutoencoderKLWrapper
             temporal_scale_factor = self.temporal_downsample_factor
         else:
-            # For base VideoAutoencoderKL, use temporal_scale_num (2^temporal_scale_num is the factor)
             temporal_scale_num = getattr(self, 'temporal_scale_num', 2)
             temporal_scale_factor = 2 ** temporal_scale_num
 
-        # --- THIS IS THE FIX FOR THE CRASH ---
+        # Spatial scale factor
         scale_factor = self.spatial_downsample_factor
-        # --- END FIX ---
 
+        # Output (decoded) sizes
         output_h = h * scale_factor
         output_w = w * scale_factor
-        output_f = f * temporal_scale_factor
+        output_f = (f - 1) * temporal_scale_factor + 1
 
-        latent_tile_size = tile_size // scale_factor
+        # Convert output-space tiling params to latent-space
+        latent_tile_size = max(1, tile_size // scale_factor)
         latent_tile_overlap = tile_overlap // scale_factor
-        latent_temporal_tile_size = temporal_tile_size // temporal_scale_factor
+        latent_tile_overlap = max(0, min(latent_tile_overlap, latent_tile_size - 1))
 
-        # Disable temporal tiling if tile size is 0 or larger than the number of frames
-        if latent_temporal_tile_size == 0 or latent_temporal_tile_size >= f:
+        latent_temporal_tile_size = max(1, temporal_tile_size // temporal_scale_factor)
+        if latent_temporal_tile_size >= f:
             latent_temporal_tile_size = f
 
+        # Build a simple spatial blend mask in output space, guard division-by-zero
         blend_mask = torch.ones((1, 1, 1, tile_size, tile_size), device=z.device, dtype=z.dtype)
-        for i in range(tile_overlap):
-            fade = i / (tile_overlap - 1)
-            blend_mask[..., :, i] *= fade
-            blend_mask[..., i, :] *= fade
-            blend_mask[..., :, -1-i] *= fade
-            blend_mask[..., -1-i, :] *= fade
+        if tile_overlap > 0:
+            denom = max(1, tile_overlap - 1)
+            for i in range(tile_overlap):
+                fade = i / denom
+                blend_mask[..., :, i] *= fade
+                blend_mask[..., i, :] *= fade
+                blend_mask[..., :, -1 - i] *= fade
+                blend_mask[..., -1 - i, :] *= fade
 
+        # Output canvas and count for normalization
         result = torch.zeros((b, self.out_channels, output_f, output_h, output_w), device=z.device, dtype=z.dtype)
         count = torch.zeros_like(result)
 
-        # Outer loop for temporal chunks
+        # Temporal placement cursor in output space
+        t_cursor = 0
+
+        # Temporal chunks in latent space
         for t_start in range(0, f, latent_temporal_tile_size):
             t_end = min(t_start + latent_temporal_tile_size, f)
             self.debug.log(f"Decoding temporal chunk: frames {t_start} to {t_end}", category="vae")
 
-            # Inner loops for spatial tiles (your existing logic)
-            stride_h = latent_tile_size - latent_tile_overlap
-            stride_w = latent_tile_size - latent_tile_overlap
-            num_tiles = ((h - latent_tile_overlap) // stride_h + 1) * ((w - latent_tile_overlap) // stride_w + 1)
+            # Memory state mirrors slicing semantics
+            memory_state = MemoryState.INITIALIZING if t_start == 0 else MemoryState.ACTIVE
+
+            # Spatial tiling strides in latent space
+            stride_h = max(1, latent_tile_size - latent_tile_overlap)
+            stride_w = max(1, latent_tile_size - latent_tile_overlap)
+
+            # Determine temporal output span for this chunk from the first decoded spatial tile
+            first_tile_decoded = False
+            out_t_start = t_cursor
+            out_t_end = t_cursor  # will be updated after first tile decode
+
             tile_id = 0
+            num_tiles_h = (max(0, h - latent_tile_overlap) + stride_h - 1) // stride_h
+            num_tiles_w = (max(0, w - latent_tile_overlap) + stride_w - 1) // stride_w
+            num_tiles = max(1, num_tiles_h * num_tiles_w)
 
             for y in range(0, h, stride_h):
+                y_end = min(y + latent_tile_size, h)
                 for x in range(0, w, stride_w):
-                    tile_id += 1
-
-                    y_end = min(y + latent_tile_size, h)
                     x_end = min(x + latent_tile_size, w)
 
-                    # Slice the latent tensor in all 3 dimensions (T, H, W)
+                    tile_id += 1
                     tile_latent = z[:, :, t_start:t_end, y:y_end, x:x_end]
-
                     self.debug.log(f"Decoding tile {tile_id} / {num_tiles} (Shape: {tile_latent.shape})", category="vae")
 
-                    # The _decode method is the base, non-slicing/tiling version.
-                    decoded_tile = self._decode(tile_latent, memory_state=MemoryState.DISABLED)
+                    decoded_tile = self._decode(tile_latent, memory_state=memory_state)
 
-                    out_t_start = t_start * temporal_scale_factor
-                    out_t_end = t_end * temporal_scale_factor
+                    # Set temporal placement from actual decoded length
+                    if not first_tile_decoded:
+                        dt_out = decoded_tile.shape[2]
+                        out_t_end = out_t_start + dt_out
+                        first_tile_decoded = True
+
                     out_y, out_y_end = y * scale_factor, y_end * scale_factor
                     out_x, out_x_end = x * scale_factor, x_end * scale_factor
 
-                    current_blend_mask = blend_mask[..., :out_y_end-out_y, :out_x_end-out_x]
+                    current_blend_mask = blend_mask[..., : (out_y_end - out_y), : (out_x_end - out_x)]
 
-                    # Add to the correct slice of the result canvas
                     result[:, :, out_t_start:out_t_end, out_y:out_y_end, out_x:out_x_end] += decoded_tile * current_blend_mask
                     count[:, :, out_t_start:out_t_end, out_y:out_y_end, out_x:out_x_end] += current_blend_mask
 
+            # Advance temporal cursor by the produced frames of this chunk
+            t_cursor = out_t_end
+
+        # Normalize blended result
         result = result / count.clamp(min=1e-6)
 
-        if z.shape[2] == 1: # Squeeze frame dim only if input was a single frame
+        # Squeeze frame dim if input had a single latent frame
+        if z.shape[2] == 1:
             result = result.squeeze(2)
 
         return result

@@ -351,8 +351,8 @@ def parse_arguments():
                         help="VAE tile size for tiled decoding (default: 512). Only used if --vae_tiling_enabled is set")
     parser.add_argument("--vae_tile_overlap", type=int, default=64,
                         help="VAE tile overlap for tiled decoding (default: 64). Only used if --vae_tiling_enabled is set")
-    parser.add_argument("--vae_temporal_tile_size", type=int, default=64,
-                        help="VAE temporal tile size for tiled decoding (default: 64). Only used if --vae_tiling_enabled is set")
+    parser.add_argument("--vae_temporal_tile_size", type=int, default=0,
+                        help="VAE temporal tile size for tiled decoding (default: 0 = disabled). Only used if --vae_tiling_enabled is set")
 
     return parser.parse_args()
 
