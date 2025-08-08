@@ -1278,6 +1278,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             z = z.unsqueeze(2)
 
         b, c, f, h, w = z.shape
+        f = temporal_tile_size
 
         # --- THIS IS THE FIX FOR THE CRASH ---
         scale_factor = self.spatial_downsample_factor
@@ -1315,6 +1316,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
             for y in range(0, h, stride_h):
                 for x in range(0, w, stride_w):
+                    self.debug.log(f"Decoding tile at position: (y={y}, x={x})", category="vae")
                     y_end = min(y + latent_tile_size, h)
                     x_end = min(x + latent_tile_size, w)
 
