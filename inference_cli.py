@@ -205,7 +205,7 @@ def save_frames_to_png(frames_tensor, output_dir, base_name):
 
 def apply_temporal_overlap_blending(frames_tensor, batch_size, overlap):
     """
-    Blend frames with temporal overlap to avoid visible jumps.
+    Blend frames with temporal overlap in pixel space and remove duplicates.
 
     Args:
         frames_tensor (torch.Tensor): [T, H, W, C], Float16 in [0,1]
@@ -220,27 +220,28 @@ def apply_temporal_overlap_blending(frames_tensor, batch_size, overlap):
         return frames_tensor
 
     step = batch_size - overlap
-    out_chunks = []
 
-    for start in range(0, T, step):
+    # Initialize with first window
+    start = 0
+    end = min(start + batch_size, T)
+    output = frames_tensor[start:end].clone()
+
+    for start in range(step, T, step):
         end = min(start + batch_size, T)
         batch = frames_tensor[start:end]
-        if start == 0:
-            out_chunks.append(batch)
-            continue
 
-        # Blend overlap with the end of previous chunk
-        prev = out_chunks[-1]
-        k = min(overlap, prev.shape[0], batch.shape[0])
+        k = min(overlap, output.shape[0], batch.shape[0])
         if k > 0:
-            blended = (prev[-k:] + batch[:k]) * 0.5
-            out_chunks[-1] = torch.cat([prev[:-k], blended], dim=0)
-            # Append non-overlapping frames
-            out_chunks.append(batch[k:])
+            # Progressive crossfade
+            previous_tail = output[-k:]
+            current_head = batch[:k]
+            blend_factor = torch.linspace(1.0, 0.0, steps=k, device=output.device, dtype=output.dtype).view(k, 1, 1, 1)
+            blended = previous_tail * blend_factor + current_head * (1 - blend_factor)
+            output = torch.cat([output[:-k], blended, batch[k:]], dim=0)
         else:
-            out_chunks.append(batch)
+            output = torch.cat([output, batch], dim=0)
 
-    return torch.cat(out_chunks, dim=0)
+    return output
 
 
 def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
