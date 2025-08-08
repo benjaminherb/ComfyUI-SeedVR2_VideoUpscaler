@@ -265,12 +265,12 @@ def _gpu_processing(frames_tensor, device_list, args):
         "seed": args.seed,
         "res_w": args.resolution,
         "batch_size": args.batch_size,
-        "temporal_overlap": 0,
+        "temporal_overlap": args.temporal_overlap,
         "block_swap_config": {
             'blocks_to_swap': args.blocks_to_swap,
             'use_none_blocking': args.use_none_blocking,
             'offload_io_components': args.offload_io_components,
-            'cache_model': args.cache_model,
+            'cache_model': False, # No caching in CLI mode
         },
         "vae_tiling_enabled": args.vae_tiling_enabled,
         "vae_tile_size": args.vae_tile_size,
@@ -340,8 +340,8 @@ def parse_arguments():
                         help="Number of blocks to swap for VRAM optimization (default: 0, disabled), up to 32 for 3B model, 36 for 7B")
     parser.add_argument("--use_none_blocking", action="store_true",
                         help="Use non-blocking memory transfers for VRAM optimization")
-    parser.add_argument("--cache_model", action="store_true",
-                        help="Cache model weights in memory to avoid reloading")
+    parser.add_argument("--temporal_overlap", type=int, default=0,
+                        help="Temporal overlap for processing (default: 0, no temporal overlap)")
     parser.add_argument("--offload_io_components", action="store_true",
                         help="Offload IO components to CPU for VRAM optimization")
     parser.add_argument("--vae_tiling_enabled", action="store_true",
@@ -350,7 +350,6 @@ def parse_arguments():
                         help="VAE tile size for tiled decoding (default: 512). Only used if --vae_tiling_enabled is set")
     parser.add_argument("--vae_tile_overlap", type=int, default=128,
                         help="VAE tile overlap for tiled decoding (default: 128). Only used if --vae_tiling_enabled is set")
-
     return parser.parse_args()
 
 
