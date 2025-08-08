@@ -150,13 +150,13 @@ class VideoDiffusionInfer():
                 if hasattr(self.vae, "preprocess"):
                     sample = self.vae.preprocess(sample)
 
-                # Decide on tiling (use output-space size since we tile for encode by output region -> latent)
+                # Decide on tiling (use output-space size)
                 H = sample.shape[-2] if sample.ndim >= 4 else 0
                 W = sample.shape[-1] if sample.ndim >= 4 else 0
                 spatial_size = H * W
                 use_tiling = (
                     hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled and
-                    spatial_size > 512 * 512  # threshold on output resolution
+                    spatial_size > 256 * 256  # threshold on output resolution
                 )
 
                 if use_tiling:
@@ -234,7 +234,6 @@ class VideoDiffusionInfer():
             if isinstance(shift, ListConfig):
                 shift = torch.tensor(shift, device=device, dtype=dtype)
 
-            # --- START: MODIFIED DECODING LOGIC ---
             # Check if tiling is enabled and if the latents are large enough to warrant it
             # This is a heuristic, adjust the threshold if needed. 512*512 is a good starting point.
             first_latent = latents[0]
@@ -303,7 +302,6 @@ class VideoDiffusionInfer():
                     samples = na.unpack(samples, indices)
                 else:
                     samples = [sample.squeeze(0) for sample in samples]
-            # --- END: MODIFIED DECODING LOGIC ---
 
         return samples
 

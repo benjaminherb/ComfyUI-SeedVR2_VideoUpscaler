@@ -1277,7 +1277,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
         b, c, f, H, W = x.shape
 
-        # Spatial scale factor (latent/output)
+        # Spatial scale factor (output/latent)
         scale_factor = self.spatial_downsample_factor
 
         # Convert output-space tiling params to latent-space
@@ -1287,7 +1287,6 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         stride_h = max(1, latent_tile_size - latent_tile_overlap)
         stride_w = max(1, latent_tile_size - latent_tile_overlap)
 
-        # Total latent spatial sizes (ceil division)
         H_lat_total = (H + scale_factor - 1) // scale_factor
         W_lat_total = (W + scale_factor - 1) // scale_factor
 
@@ -1317,10 +1316,9 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                     category="vae",
                 )
 
-                # Temporal slicing handled inside
                 encoded_tile = self.slicing_encode(tile_sample)
 
-                # Initialize latent canvas using first encoded tile
+                # Initialize output size using first encoded tile
                 if result is None:
                     b_out, c_out, f_lat, _, _ = encoded_tile.shape
                     result = torch.zeros(
@@ -1342,27 +1340,34 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 ov_h = max(0, min(latent_tile_overlap, eff_h_lat - 1))
                 ov_w = max(0, min(latent_tile_overlap, eff_w_lat - 1))
                 blend_mask = torch.ones((1, 1, 1, eff_h_lat, eff_w_lat), device=et.device, dtype=et.dtype)
+                # Apply fades only on interior edges (avoid fading on edges)
+                top_edge = (y_lat == 0)
+                bottom_edge = (y_lat_end == H_lat_total)
+                left_edge = (x_lat == 0)
+                right_edge = (x_lat_end == W_lat_total)
                 if ov_h > 0:
                     denom_h = max(1, ov_h - 1)
                     for i in range(ov_h):
-                        fade = i / denom_h
-                        blend_mask[..., i, :] *= fade
-                        blend_mask[..., -1 - i, :] *= fade
+                        fade = i / denom_h if denom_h > 0 else 0.0
+                        if not top_edge:
+                            blend_mask[..., i, :] *= fade
+                        if not bottom_edge:
+                            blend_mask[..., -1 - i, :] *= fade
                 if ov_w > 0:
                     denom_w = max(1, ov_w - 1)
                     for i in range(ov_w):
-                        fade = i / denom_w
-                        blend_mask[..., :, i] *= fade
-                        blend_mask[..., :, -1 - i] *= fade
+                        fade = i / denom_w if denom_w > 0 else 0.0
+                        if not left_edge:
+                            blend_mask[..., :, i] *= fade
+                        if not right_edge:
+                            blend_mask[..., :, -1 - i] *= fade
 
                 result[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += et * blend_mask
                 count[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += blend_mask
 
-        # Normalize blended latents
-        result = result / count.clamp(min=1e-6)
+        result = result / count.clamp(min=1e-6) # normalize
 
-        # Squeeze frame dim if input had a single frame
-        if x.shape[2] == 1:
+        if x.shape[2] == 1: # single frame
             result = result.squeeze(2)
 
         return result
