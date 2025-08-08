@@ -42,23 +42,24 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 from src.utils.downloads import download_weight
+from src.utils.debug import Debug
+
+debug = Debug(enabled=False)  # Default to disabled, can be enabled via CLI
 
 
-def extract_frames_from_video(video_path, debug=False, skip_first_frames=0, load_cap=None):
+def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None):
     """
     Extract frames from video and convert to tensor format
     
     Args:
         video_path (str): Path to input video
-        debug (bool): Enable debug logging
         skip_first_frame (bool): Skip the first frame during extraction
         load_cap (int): Maximum number of frames to load (None for all)
         
     Returns:
         torch.Tensor: Frames tensor in format [T, H, W, C] (Float16, normalized 0-1)
     """
-    if debug:
-        print(f"🎬 Extracting frames from video: {video_path}")
+    debug.log(f"Extracting frames from video: {video_path}", category="file")
     
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -74,12 +75,11 @@ def extract_frames_from_video(video_path, debug=False, skip_first_frames=0, load
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    if debug:
-        print(f"📊 Video info: {frame_count} frames, {width}x{height}, {fps:.2f} FPS")
-        if skip_first_frames:
-            print(f"⏭️ Will skip first {skip_first_frames} frames")
-        if load_cap:
-            print(f"🔢 Will load maximum {load_cap} frames")
+    debug.log(f"Video info: {frame_count} frames, {width}x{height}, {fps:.2f} FPS", category="info")
+    if skip_first_frames:
+        debug.log(f"⏭️ Will skip first {skip_first_frames} frames", category="info")
+    if load_cap:
+        debug.log(f"🔢 Will load maximum {load_cap} frames", category="info")
     
     frames = []
     frame_idx = 0
@@ -93,14 +93,12 @@ def extract_frames_from_video(video_path, debug=False, skip_first_frames=0, load
         # Skip first frame if requested
         if frame_idx < skip_first_frames:
             frame_idx += 1
-            if debug:
-                print(f"⏭️ Skipped first frame")
+            debug.log(f"⏭️ Skipped first frame", category="info")
             continue
         
         # Check load cap
         if load_cap is not None and load_cap > 0 and frames_loaded >= load_cap:
-            if debug:
-                print(f"🔢 Reached load cap of {load_cap} frames")
+            debug.log(f"🔢 Reached load cap of {load_cap} frames", category="info")
             break
         
         # Convert BGR to RGB
@@ -113,28 +111,26 @@ def extract_frames_from_video(video_path, debug=False, skip_first_frames=0, load
         frame_idx += 1
         frames_loaded += 1
         
-        if debug and frames_loaded % 100 == 0:
+        if debug.enabled and frames_loaded % 100 == 0:
             total_to_load = min(frame_count, load_cap) if load_cap else frame_count
-            print(f"📹 Extracted {frames_loaded}/{total_to_load} frames")
+            debug.log(f"📹 Extracted {frames_loaded}/{total_to_load} frames", category="file")
     
     cap.release()
     
     if len(frames) == 0:
         raise ValueError(f"No frames extracted from video: {video_path}")
     
-    if debug:
-        print(f"✅ Extracted {len(frames)} frames")
+    debug.log(f"Extracted {len(frames)} frames", category="success")
     
     # Convert to tensor [T, H, W, C] and cast to Float16 for ComfyUI compatibility
     frames_tensor = torch.from_numpy(np.stack(frames)).to(torch.float16)
     
-    if debug:
-        print(f"📊 Frames tensor shape: {frames_tensor.shape}, dtype: {frames_tensor.dtype}")
-    
+    debug.log(f"📊 Frames tensor shape: {frames_tensor.shape}, dtype: {frames_tensor.dtype}", category="memory")
+
     return frames_tensor, fps
 
 
-def save_frames_to_video(frames_tensor, output_path, fps=30.0, debug=False):
+def save_frames_to_video(frames_tensor, output_path, fps=30.0):
     """
     Save frames tensor to video file
     
@@ -142,11 +138,9 @@ def save_frames_to_video(frames_tensor, output_path, fps=30.0, debug=False):
         frames_tensor (torch.Tensor): Frames in format [T, H, W, C] (Float16, 0-1)
         output_path (str): Output video path
         fps (float): Output video FPS
-        debug (bool): Enable debug logging
     """
-    if debug:
-        print(f"🎬 Saving {frames_tensor.shape[0]} frames to video: {output_path}")
-    
+    debug.log(f"Saving {frames_tensor.shape[0]} frames to video: {output_path}", category="file")
+
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
@@ -169,17 +163,16 @@ def save_frames_to_video(frames_tensor, output_path, fps=30.0, debug=False):
         # Convert RGB to BGR for OpenCV
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         out.write(frame_bgr)
-        
-        if debug and (i + 1) % 100 == 0:
-            print(f"💾 Saved {i + 1}/{T} frames")
-    
+
+        if debug.enabled and (i + 1) % 100 == 0:
+            debug.log(f"Saved {i + 1}/{T} frames", category="file")
+
     out.release()
     
-    if debug:
-        print(f"✅ Video saved successfully: {output_path}")
+    debug.log(f"Video saved successfully: {output_path}", category="success")
 
 
-def save_frames_to_png(frames_tensor, output_dir, base_name, debug=False):
+def save_frames_to_png(frames_tensor, output_dir, base_name):
     """
     Save frames tensor as sequential PNG images.
 
@@ -187,10 +180,8 @@ def save_frames_to_png(frames_tensor, output_dir, base_name, debug=False):
         frames_tensor (torch.Tensor): Frames in format [T, H, W, C] (Float16, 0-1)
         output_dir (str): Directory to save PNGs
         base_name (str): Base name for output files (without extension)
-        debug (bool): Enable debug logging
     """
-    if debug:
-        print(f"🖼️ Saving {frames_tensor.shape[0]} frames as PNGs to directory: {output_dir}")
+    debug.log(f"Saving {frames_tensor.shape[0]} frames as PNGs to directory: {output_dir}", category="file")
 
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -206,11 +197,10 @@ def save_frames_to_png(frames_tensor, output_dir, base_name, debug=False):
         # Convert RGB to BGR for cv2
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         cv2.imwrite(file_path, frame_bgr)
-        if debug and (idx + 1) % 100 == 0:
-            print(f"💾 Saved {idx + 1}/{total} PNGs")
+        if debug.enabled and (idx + 1) % 100 == 0:
+            debug.log(f"Saved {idx + 1}/{total} PNGs", category="file")
 
-    if debug:
-        print(f"✅ PNG saving completed: {total} files in '{output_dir}'")
+    debug.log(f"PNG saving completed: {total} files in '{output_dir}'", category="success")
 
 
 def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
@@ -232,8 +222,7 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
     model_dir = shared_args["model_dir"]
     model_name = shared_args["model"]
     # ensure model weights present (each process checks but very fast if already downloaded)
-    if shared_args["debug"]:
-        print(f"🔄 Configuring runner for device {device_id}")
+    debug.log(f"Configuring runner for device {device_id}", category="general")
     runner = configure_runner(model_name, model_dir, shared_args["preserve_vram"], shared_args["debug"], block_swap_config=shared_args["block_swap_config"])
 
     # Run generation
@@ -246,8 +235,8 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
         batch_size=shared_args["batch_size"],
         preserve_vram=shared_args["preserve_vram"],
         temporal_overlap=shared_args["temporal_overlap"],
-        debug=shared_args["debug"],
-        block_swap_config = shared_args["block_swap_config"]
+        debug=Debug(enabled=shared_args["debug"]),
+        block_swap_config=shared_args["block_swap_config"]
     )
 
     # Send back result as numpy array to avoid CUDA transfers
@@ -279,7 +268,6 @@ def _gpu_processing(frames_tensor, device_list, args):
             'use_none_blocking': args.use_none_blocking,
             'offload_io_components': args.offload_io_components,
             'cache_model': False,
-            'enable_debug': True
         },
     }
 
@@ -354,22 +342,21 @@ def parse_arguments():
 
 def main():
     """Main CLI function"""
-    print(f"🚀 SeedVR2 Video Upscaler CLI started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    debug.log(f"SeedVR2 Video Upscaler CLI started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", category="model", force=True)
     
     # Parse arguments
     args = parse_arguments()
+    debug.enabled = args.debug  
     
-    if args.debug:
-        print(f"📋 Arguments:")
-        for key, value in vars(args).items():
-            print(f"   {key}: {value}")
+    debug.log("Arguments:", category="setup")
+    for key, value in vars(args).items():
+        debug.log(f"\t{key}: {value}", category="none")
     
-    if args.debug:
-        # Show actual CUDA device visibility
-        print(f"🖥️ CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set (all)')}")
-        if torch.cuda.is_available():
-            print(f"🖥️ torch.cuda.device_count(): {torch.cuda.device_count()}")
-            print(f"🖥️ Using device index 0 inside script (mapped to selected GPU)")
+    # Show actual CUDA device visibility
+    debug.log(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set (all)')}", category="device")
+    if torch.cuda.is_available():
+        debug.log(f"torch.cuda.device_count(): {torch.cuda.device_count()}", category="device")
+        debug.log(f"Using device index 0 inside script (mapped to selected GPU)", category="device")
     
     try:
         # Ensure --output is a directory when using PNG format
@@ -378,74 +365,68 @@ def main():
             if output_path_obj.suffix:  # an extension is present, strip it
                 args.output = str(output_path_obj.with_suffix(''))
         
-        if args.debug:
-            print(f"📁 Output will be saved to: {args.output}")
+        debug.log(f"Output will be saved to: {args.output}", category="file")
         
         # Extract frames from video
-        print(f"🎬 Extracting frames from video...")
+        debug.log(f"Extracting frames from video...", category="generation")
         start_time = time.time()
         frames_tensor, original_fps = extract_frames_from_video(
             args.video_path, 
-            args.debug, 
             args.skip_first_frames, 
             args.load_cap
         )
         
-        if args.debug:
-            print(f"🔄 Frame extraction time: {time.time() - start_time:.2f}s")
-            # print(f"📊 Initial VRAM: {torch.cuda.memory_allocated() / 1024**3:.2f}GB") # may initialize cuda
-        
+        debug.log(f"Frame extraction time: {time.time() - start_time:.2f}s", category="general")
+        # debug.log(f"📊 Initial VRAM: {torch.cuda.memory_allocated() / 1024**3:.2f}GB", category="memory")
+
         # Parse GPU list
         device_list = [d.strip() for d in str(args.cuda_device).split(',') if d.strip()] if args.cuda_device else ["0"]
-        if args.debug:
-            print(f"🚀 Using devices: {device_list}")
+        debug.log(f"Using devices: {device_list}", category="device")
         processing_start = time.time()
         download_weight(args.model, args.model_dir)
         result = _gpu_processing(frames_tensor, device_list, args)
         generation_time = time.time() - processing_start
         
-        if args.debug:
-            print(f"🔄 Generation time: {generation_time:.2f}s")
-            print(f"📊 Peak VRAM usage: {torch.cuda.max_memory_allocated() / 1024**3:.2f}GB")
-            print(f"📊 Result shape: {result.shape}, dtype: {result.dtype}")
+        debug.log(f"Generation time: {generation_time:.2f}s", category="general")
+        debug.log(f"Peak VRAM usage: {torch.cuda.max_memory_allocated() / 1024**3:.2f}GB", category="memory")
+        debug.log(f"Result shape: {result.shape}, dtype: {result.dtype}", category="memory")
         
         # After generation_time calculation, choose saving method
         if args.output_format == "png":
             # Ensure output treated as directory
             output_dir = args.output
             base_name = Path(args.video_path).stem + "_upscaled"
-            if args.debug:
-                print(f"🖼️ Saving PNG frames to directory: {output_dir}")
+            debug.log(f"Saving PNG frames to directory: {output_dir}", category="file")
+            
             save_start = time.time()
-            save_frames_to_png(result, output_dir, base_name, args.debug)
-            if args.debug:
-                print(f"🔄 Save time: {time.time() - save_start:.2f}s")
+            save_frames_to_png(result, output_dir, base_name)
+
+            debug.log(f"Save time: {time.time() - save_start:.2f}s", category="general")
+
         else:
             # Save video
-            if args.debug:
-                print(f"💾 Saving upscaled video to: {args.output}")
+            debug.log(f"Saving upscaled video to: {args.output}", category="file")
             save_start = time.time()
-            save_frames_to_video(result, args.output, original_fps, args.debug)
-            if args.debug:
-                print(f"🔄 Save time: {time.time() - save_start:.2f}s")
+            save_frames_to_video(result, args.output, original_fps)
+            debug.log(f"Save time: {time.time() - save_start:.2f}s", category="general")
         
         total_time = time.time() - start_time
-        print(f"✅ Upscaling completed successfully!")
+        debug.log(f"Upscaling completed successfully!", category="success", force=True)
         if args.output_format == "png":
-            print(f"📁 PNG frames saved in directory: {args.output}")
+            debug.log(f"PNG frames saved in directory: {args.output}", category="file", force=True)
         else:
-            print(f"📁 Output saved to video: {args.output}")
-        print(f"🕒 Total processing time: {total_time:.2f}s")
-        print(f"⚡ Average FPS: {len(frames_tensor) / generation_time:.2f} frames/sec")
+            debug.log(f"Output saved to video: {args.output}", category="file", force=True)
+        debug.log(f"Total processing time: {total_time:.2f}s", category="timing", force=True)
+        debug.log(f"Average FPS: {len(frames_tensor) / generation_time:.2f} frames/sec", category="timing", force=True)
         
     except Exception as e:
-        print(f"❌ Error during processing: {e}")
+        debug.log(f"Error during processing: {e}", category="error", force=True)
         import traceback
         traceback.print_exc()
         sys.exit(1)
     
     finally:
-        print(f"🧹 Process {os.getpid()} terminating - VRAM will be automatically freed")
+        debug.log(f"Process {os.getpid()} terminating - VRAM will be automatically freed", category="cleanup", force=True)
 
 
 if __name__ == "__main__":

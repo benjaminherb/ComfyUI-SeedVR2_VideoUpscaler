@@ -48,6 +48,8 @@ class Debug:
         "vae": "🎨",          # VAE operations
         "store": "📦",        # Storing
         "precision": "🎯",    # Precision
+        "device": "🖥️",       # Device info
+        "file": "📂",         # File operations
         "none" : "",
     }
     
