@@ -68,12 +68,18 @@ def optimized_channels_to_second(tensor):
         return tensor.permute(*dims)
 
 class VideoDiffusionInfer():
-    def __init__(self, config: DictConfig, debug=None):
+    def __init__(self, config: DictConfig, debug=None,  vae_tiling_enabled: bool = False, 
+                 vae_tile_size: int = 512, vae_tile_overlap: int = 64, vae_temporal_tile_size: int = 64):
         # Check if debug instance is available
         if debug is None:
             raise ValueError("Debug instance must be provided to VideoDiffusionInfer")
         self.config = config
         self.debug = debug
+        self.vae_tiling_enabled = vae_tiling_enabled
+        self.vae_tile_size = vae_tile_size
+        self.vae_tile_overlap = vae_tile_overlap
+        self.vae_temporal_tile_size = vae_temporal_tile_size
+        
     def get_condition(self, latent: Tensor, latent_blur: Tensor, task: str) -> Tensor:
         t, h, w, c = latent.shape
         cond = torch.zeros([t, h, w, c + 1], device=latent.device, dtype=latent.dtype)
@@ -192,12 +198,18 @@ class VideoDiffusionInfer():
             )
 
             if use_tiling:
-                print(f"🚀 Using VAE Tiled Decoding (Tile: {self.vae_tile_size}, Overlap: {self.vae_tile_overlap})")
+                self.debug.log(f"Using VAE Tiled Decoding (Tile: {self.vae_tile_size}, Overlap: {self.vae_tile_overlap})", category="vae", force=True)
 
-               # Tiling is done one latent at a time
+                # Apply same grouping logic as regular decode
+                if self.config.vae.grouping:
+                    latents, indices = na.pack(latents)
+                else:
+                    latents = [latent.unsqueeze(0) for latent in latents]
+
+                # Tiling is done one latent at a time
                 for latent in latents:
-                    latent = latent.unsqueeze(0) # Add batch dimension
-                    latent = latent.to(device, dtype, non_blocking=True)
+                    effective_dtype = target_dtype if target_dtype is not None else dtype
+                    latent = latent.to(device, effective_dtype, non_blocking=True)
                     latent = latent / scale + shift
                     latent = rearrange(latent, "b ... c -> b c ...")
                     
@@ -211,8 +223,13 @@ class VideoDiffusionInfer():
                     
                     if hasattr(self.vae, "postprocess"):
                         sample = self.vae.postprocess(sample)
-                    samples.append(sample.squeeze(0)) # Remove batch dimension
-                    self.clear_vram_cache()
+                    samples.append(sample) 
+                    clear_vram_cache(self.debug)
+
+                if self.config.vae.grouping:
+                    samples = na.unpack(samples, indices)
+                else:
+                    samples = [sample.squeeze(0) for sample in samples]
 
             else: # Original logic for smaller images or when tiling is disabled
                 if self.config.vae.grouping:
