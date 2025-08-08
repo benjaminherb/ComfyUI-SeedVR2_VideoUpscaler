@@ -1269,8 +1269,77 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
     def tiled_encode(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
         raise NotImplementedError
 
-    def tiled_decode(self, z: torch.Tensor, **kwargs) -> torch.Tensor:
-        raise NotImplementedError
+    def tiled_decode(self, z: torch.Tensor, tile_size: int = 512, tile_overlap: int = 64, temporal_tile_size: int = 16) -> torch.Tensor:
+        r"""
+        Decodes a latent tensor `z` by splitting it into spatial AND temporal tiles,
+        decoding each tile, and then blending them back together.
+        """
+        if z.ndim != 5:
+            z = z.unsqueeze(2)
+
+        b, c, f, h, w = z.shape
+
+        # --- THIS IS THE FIX FOR THE CRASH ---
+        scale_factor = self.spatial_downsample_factor
+        # --- END FIX ---
+
+        output_h = h * scale_factor
+        output_w = w * scale_factor
+
+        latent_tile_size = tile_size // scale_factor
+        latent_tile_overlap = tile_overlap // scale_factor
+
+        # Disable temporal tiling if tile size is 0 or larger than the number of frames
+        if temporal_tile_size == 0 or temporal_tile_size >= f:
+            temporal_tile_size = f
+
+        blend_mask = torch.ones((1, 1, 1, tile_size, tile_size), device=z.device, dtype=z.dtype)
+        for i in range(tile_overlap):
+            fade = i / (tile_overlap - 1)
+            blend_mask[..., :, i] *= fade
+            blend_mask[..., i, :] *= fade
+            blend_mask[..., :, -1-i] *= fade
+            blend_mask[..., -1-i, :] *= fade
+
+        result = torch.zeros((b, self.out_channels, f, output_h, output_w), device=z.device, dtype=z.dtype)
+        count = torch.zeros_like(result)
+
+        # Outer loop for temporal chunks
+        for t_start in range(0, f, temporal_tile_size):
+            t_end = min(t_start + temporal_tile_size, f)
+            print(f"   Decoding temporal chunk: frames {t_start} to {t_end}")
+
+            # Inner loops for spatial tiles (your existing logic)
+            stride_h = latent_tile_size - latent_tile_overlap
+            stride_w = latent_tile_size - latent_tile_overlap
+
+            for y in range(0, h, stride_h):
+                for x in range(0, w, stride_w):
+                    y_end = min(y + latent_tile_size, h)
+                    x_end = min(x + latent_tile_size, w)
+
+                    # Slice the latent tensor in all 3 dimensions (T, H, W)
+                    tile_latent = z[:, :, t_start:t_end, y:y_end, x:x_end]
+
+                    # The _decode method is the base, non-slicing/tiling version.
+                    decoded_tile = self._decode(tile_latent, memory_state=MemoryState.DISABLED)
+
+                    out_t_start, out_t_end = t_start, t_end
+                    out_y, out_y_end = y * scale_factor, y_end * scale_factor
+                    out_x, out_x_end = x * scale_factor, x_end * scale_factor
+
+                    current_blend_mask = blend_mask[..., :out_y_end-out_y, :out_x_end-out_x]
+
+                    # Add to the correct slice of the result canvas
+                    result[:, :, out_t_start:out_t_end, out_y:out_y_end, out_x:out_x_end] += decoded_tile * current_blend_mask
+                    count[:, :, out_t_start:out_t_end, out_y:out_y_end, out_x:out_x_end] += current_blend_mask
+
+        result = result / count.clamp(min=1e-6)
+
+        if z.shape[2] == 1: # Squeeze frame dim only if input was a single frame
+            result = result.squeeze(2)
+
+        return result
 
     def forward(
         self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs

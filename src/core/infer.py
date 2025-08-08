@@ -181,53 +181,69 @@ class VideoDiffusionInfer():
             if isinstance(shift, ListConfig):
                 shift = torch.tensor(shift, device=device, dtype=dtype)
 
+            # --- START: MODIFIED DECODING LOGIC ---
+            # Check if tiling is enabled and if the latents are large enough to warrant it
+            # This is a heuristic, adjust the threshold if needed. 512*512 is a good starting point.
+            first_latent = latents[0]
+            spatial_size = first_latent.shape[1] * first_latent.shape[2] # H * W of latent
+            use_tiling = (
+                hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled and
+                spatial_size > 32*32 # A threshold for latent size (e.g., > 256x256 image)
+            )
 
-            # 🚀 OPTIMISATION 1: Group latents intelligemment pour batch processing
-            if self.config.vae.grouping:
-                latents, indices = na.pack(latents)
-            else:
-                latents = [latent.unsqueeze(0) for latent in latents]
+            if use_tiling:
+                print(f"🚀 Using VAE Tiled Decoding (Tile: {self.vae_tile_size}, Overlap: {self.vae_tile_overlap})")
 
-            self.debug.log(f"Latents batch shape: {latents[0].shape}", category="info")
-            #self.debug.log(f"🔄 GROUPING time: {time.time() - t} seconds", category="timing")
-            self.debug.start_timer("vae_decode")
-            # 🚀 OPTIMISATION 2: Traitement batch optimisé avec dtype adaptatif
-            for i, latent in enumerate(latents):
-                # Préparation optimisée du latent
-                # Utiliser target_dtype si fourni (évite double autocast)
-                effective_dtype = target_dtype if target_dtype is not None else dtype
-                latent = latent.to(device, effective_dtype, non_blocking=True)
-                latent = latent / scale + shift
-                latent = rearrange(latent, "b ... c -> b c ...")
-                #latent = optimized_channels_to_second(latent)
-                latent = latent.squeeze(2)
-                
-                # 🚀 OPTIMISATION 3: Décodage direct SANS autocast (utilise l'autocast externe)
-                #with torch.autocast("cuda", torch.float16, enabled=True):
-                sample = self.vae.decode(latent, preserve_vram).sample
-                #sample = self.vae.decode(latent).sample
-                #sample = self.vae.decode(latent).sample
-                
-                # 🚀 OPTIMISATION 4: Post-processing conditionnel
-                if hasattr(self.vae, "postprocess"):
-                    sample = self.vae.postprocess(sample)
+               # Tiling is done one latent at a time
+                for latent in latents:
+                    latent = latent.unsqueeze(0) # Add batch dimension
+                    latent = latent.to(device, dtype, non_blocking=True)
+                    latent = latent / scale + shift
+                    latent = rearrange(latent, "b ... c -> b c ...")
                     
-                samples.append(sample)
-                
-                # 🚀 OPTIMISATION 5: Nettoyage sélectif
-                #if i % 2 == 0 or i == len(latents) - 1:
-                    #torch.cuda.empty_cache()
-            
-            self.debug.end_timer("vae_decode", "VAE decode completed")
-            #t = time.time()
-            # Ungroup back to individual sample with the original order.
-            if self.config.vae.grouping:
-                samples = na.unpack(samples, indices)
-            else:
-                samples = [sample.squeeze(0) for sample in samples]
-            #self.debug.log(f"🔄 UNGROUPING time: {time.time() - t} seconds", category="timing")
-            #t = time.time()
+                    with torch.autocast("cuda", torch.float16, enabled=True):
+                        sample = self.vae.tiled_decode(
+                            latent,
+                            tile_size=self.vae_tile_size,
+                            tile_overlap=self.vae_tile_overlap,
+                            temporal_tile_size=self.vae_temporal_tile_size
+                        )
+                    
+                    if hasattr(self.vae, "postprocess"):
+                        sample = self.vae.postprocess(sample)
+                    samples.append(sample.squeeze(0)) # Remove batch dimension
+                    self.clear_vram_cache()
+
+            else: # Original logic for smaller images or when tiling is disabled
+                if self.config.vae.grouping:
+                    latents, indices = na.pack(latents)
+                else:
+                    latents = [latent.unsqueeze(0) for latent in latents]
+                t = time.time()
+                for i, latent in enumerate(latents):
+                    effective_dtype = target_dtype if target_dtype is not None else dtype
+                    latent = latent.to(device, effective_dtype, non_blocking=True)
+                    latent = latent / scale + shift
+                    latent = rearrange(latent, "b ... c -> b c ...")
+                    # Original logic used squeeze(2), let's keep it for compatibility
+                    if latent.ndim == 5:
+                        latent = latent.squeeze(2)
+                    with torch.autocast("cuda", torch.float16, enabled=True):
+                            sample = self.vae.decode(latent).sample
+                    if hasattr(self.vae, "postprocess"):
+                        sample = self.vae.postprocess(sample)
+                    samples.append(sample)
+                    if i % 2 == 0 or i == len(latents) - 1:
+                        torch.cuda.empty_cache()
+                print(f"🔄 DECODE time: {time.time() - t} seconds")
+                if self.config.vae.grouping:
+                    samples = na.unpack(samples, indices)
+                else:
+                    samples = [sample.squeeze(0) for sample in samples]
+            # --- END: MODIFIED DECODING LOGIC ---
+
         return samples
+
 
     def timestep_transform(self, timesteps: Tensor, latents_shapes: Tensor):
         # Skip if not needed.
