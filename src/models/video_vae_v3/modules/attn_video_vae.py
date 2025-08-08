@@ -1303,7 +1303,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             for x_lat in range(0, W_lat_total, stride_w):
                 x_lat_end = min(x_lat + latent_tile_size, W_lat_total)
 
-                # Corresponding output-space crop
+                # Map latent tile to output-space crop
                 y_out = y_lat * scale_factor
                 x_out = x_lat * scale_factor
                 y_out_end = min(y_lat_end * scale_factor, H)
@@ -1411,14 +1411,13 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         num_tiles_w = (W + stride_w - 1) // stride_w
         num_tiles = max(1, num_tiles_h * num_tiles_w)
 
-        for y in range(0, H, stride_h):
-            y_end = min(y + latent_tile_size, H)
-            for x in range(0, W, stride_w):
-                x_end = min(x + latent_tile_size, W)
+        for y_lat in range(0, H, stride_h):
+            y_lat_end = min(y_lat + latent_tile_size, H)
+            for x_lat in range(0, W, stride_w):
+                x_lat_end = min(x_lat + latent_tile_size, W)
 
                 tile_id += 1
-                tile_latent = z[:, :, :, y:y_end, x:x_end]
-                self.debug.log(f"Decoding tile {tile_id} / {num_tiles} (Shape: {list(tile_latent.shape)})", category="vae")
+                tile_latent = z[:, :, :, y_lat:y_lat_end, x_lat:x_lat_end]
 
                 decoded_tile = self.slicing_decode(tile_latent)
 
@@ -1430,20 +1429,24 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                     result = torch.zeros((b_out, c_out, out_f_tile, output_h, output_w), device=decoded_tile.device, dtype=decoded_tile.dtype)
                     count = torch.zeros_like(result)
 
-                out_y, out_y_end = y * scale_factor, y_end * scale_factor
-                out_x, out_x_end = x * scale_factor, x_end * scale_factor
+                # Corresponding output-space placement
+                y_out, y_out_end = y_lat * scale_factor, y_lat_end * scale_factor
+                x_out, x_out_end = x_lat * scale_factor, x_lat_end * scale_factor
 
-                current_blend_mask = blend_mask[..., : (out_y_end - out_y), : (out_x_end - out_x)]
+                self.debug.log(
+                    f"Decoding tile {tile_id} / {num_tiles} (Lat [{y_lat}:{y_lat_end}, {x_lat}:{x_lat_end}] -> Out [{y_out}:{y_out_end}, {x_out}:{x_out_end}], Shape: {list(tile_latent.shape)})",
+                    category="vae",
+                )
+
+                current_blend_mask = blend_mask[..., : (y_out_end - y_out), : (x_out_end - x_out)]
 
                 # Place entire temporal span produced by slicing_decode
-                result[:, :, : decoded_tile.shape[2], out_y:out_y_end, out_x:out_x_end] += decoded_tile * current_blend_mask
-                count[:, :, : decoded_tile.shape[2], out_y:out_y_end, out_x:out_x_end] += current_blend_mask
+                result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile * current_blend_mask
+                count[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += current_blend_mask
 
-        # Normalize blended result
-        result = result / count.clamp(min=1e-6)
+        result = result / count.clamp(min=1e-6) # normaliz
 
-        # Squeeze frame dim if input had a single latent frame
-        if z.shape[2] == 1:
+        if z.shape[2] == 1: # single frame
             result = result.squeeze(2)
 
         return result
