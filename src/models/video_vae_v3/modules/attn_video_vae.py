@@ -1304,8 +1304,9 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         count = None
 
         tile_id = 0
-        num_tiles_h = (max(0, h - latent_tile_overlap) + stride_h - 1) // stride_h
-        num_tiles_w = (max(0, w - latent_tile_overlap) + stride_w - 1) // stride_w
+        # Use ceil division of dimension by stride to match the loop range(0, dim, stride)
+        num_tiles_h = (h + stride_h - 1) // stride_h
+        num_tiles_w = (w + stride_w - 1) // stride_w
         num_tiles = max(1, num_tiles_h * num_tiles_w)
 
         for y in range(0, h, stride_h):
@@ -1315,7 +1316,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
                 tile_id += 1
                 tile_latent = z[:, :, :, y:y_end, x:x_end]
-                self.debug.log(f"Decoding tile {tile_id} / {num_tiles} (Shape: {tile_latent.shape})", category="vae")
+                self.debug.log(f"Decoding tile {tile_id} / {num_tiles} (Shape: {list(tile_latent.shape)})", category="vae")
 
                 decoded_tile = self.slicing_decode(tile_latent)
 

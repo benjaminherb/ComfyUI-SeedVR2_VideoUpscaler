@@ -42,7 +42,7 @@ script_directory = get_script_directory()
 
 def configure_runner(model, base_cache_dir, preserve_vram=False, debug=None, 
                     cache_model=False, block_swap_config=None, cached_runner=None, vae_tiling_enabled=False,
-                    vae_tile_size=None, vae_tile_overlap=None, vae_temporal_tile_size=None):
+                    vae_tile_size=None, vae_tile_overlap=None):
     """
     Configure and create a VideoDiffusionInfer runner for the specified model
     
@@ -170,7 +170,7 @@ def configure_runner(model, base_cache_dir, preserve_vram=False, debug=None,
     
     debug.start_timer("runner_video_infer")
     # Create runner
-    runner = VideoDiffusionInfer(config, debug, vae_tiling_enabled=vae_tiling_enabled, vae_tile_size=vae_tile_size, vae_tile_overlap=vae_tile_overlap, vae_temporal_tile_size=vae_temporal_tile_size)
+    runner = VideoDiffusionInfer(config, debug, vae_tiling_enabled=vae_tiling_enabled, vae_tile_size=vae_tile_size, vae_tile_overlap=vae_tile_overlap)
     OmegaConf.set_readonly(runner.config, False)
     # Store model name for cache validation
     runner._model_name = model
