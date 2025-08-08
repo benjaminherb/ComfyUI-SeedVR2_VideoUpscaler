@@ -47,7 +47,7 @@ from src.utils.debug import Debug
 debug = Debug(enabled=False)  # Default to disabled, can be enabled via CLI
 
 
-def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None):
+def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, prepend_frames=0):
     """
     Extract frames from video and convert to tensor format
     
@@ -80,6 +80,8 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None):
         debug.log(f"Will skip first {skip_first_frames} frames", category="info")
     if load_cap:
         debug.log(f"Will load maximum {load_cap} frames", category="info")
+    if prepend_frames:
+        debug.log(f"Will prepend {prepend_frames} frames to the video", category="info")
     
     frames = []
     frame_idx = 0
@@ -121,7 +123,12 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None):
         raise ValueError(f"No frames extracted from video: {video_path}")
     
     debug.log(f"Extracted {len(frames)} frames", category="success")
-    
+
+    # preprend frames if requested (reverse of the first few frames)
+    if prepend_frames > 0:
+        prepend_frames = min(prepend_frames, len(frames))
+        frames = frames[-prepend_frames:] + frames
+
     # Convert to tensor [T, H, W, C] and cast to Float16 for ComfyUI compatibility
     frames_tensor = torch.from_numpy(np.stack(frames)).to(torch.float16)
     
@@ -220,26 +227,41 @@ def apply_temporal_overlap_blending(frames_tensor, batch_size, overlap):
         return frames_tensor
 
     step = batch_size - overlap
+    if step <= 0:
+        return frames_tensor
 
-    # Initialize with first window
-    start = 0
-    end = min(start + batch_size, T)
-    output = frames_tensor[start:end].clone()
+    device = frames_tensor.device
+    dtype = frames_tensor.dtype
 
+    # Start with the first window fully
+    first_end = min(batch_size, T)
+    output = frames_tensor[:first_end]
+
+    # Process subsequent overlapping windows
     for start in range(step, T, step):
         end = min(start + batch_size, T)
-        batch = frames_tensor[start:end]
 
-        k = min(overlap, output.shape[0], batch.shape[0])
+        # Number of frames to blend (may be smaller on the last short window)
+        k = min(overlap, end - start)
         if k > 0:
-            # Progressive crossfade
-            previous_tail = output[-k:]
-            current_head = batch[:k]
-            blend_factor = torch.linspace(1.0, 0.0, steps=k, device=output.device, dtype=output.dtype).view(k, 1, 1, 1)
-            blended = previous_tail * blend_factor + current_head * (1 - blend_factor)
-            output = torch.cat([output[:-k], blended, batch[k:]], dim=0)
+            prev_tail = output[-k:]
+            cur_head = frames_tensor[start:start + k]
+
+            # Crossfade 
+            w_prev = torch.linspace(1.0, 0.0, steps=k, device=device, dtype=dtype).view(k, 1, 1, 1)
+            w_cur = 1.0 - w_prev
+            blended = prev_tail * w_prev + cur_head * w_cur
+
+            # Replace the last k frames with blended result
+            output = torch.cat([output[:-k], blended], dim=0)
+
+            # Append the non-overlapping remainder of current window
+            if start + k < end:
+                output = torch.cat([output, frames_tensor[start + k:end]], dim=0)
         else:
-            output = torch.cat([output, batch], dim=0)
+            # No overlap at the end
+            if start < end:
+                output = torch.cat([output, frames_tensor[start:end]], dim=0)
 
     return output
 
@@ -383,6 +405,8 @@ def parse_arguments():
                         help="Use non-blocking memory transfers for VRAM optimization")
     parser.add_argument("--temporal_overlap", type=int, default=0,
                         help="Temporal overlap for processing (default: 0, no temporal overlap)")
+    parser.add_argument("--prepend_frames", type=int, default=0,
+                        help="Number of frames to prepend to the video (default: 0). This can help with artifacts at the start of the video and are removed after processing")
     parser.add_argument("--offload_io_components", action="store_true",
                         help="Offload IO components to CPU for VRAM optimization")
     parser.add_argument("--vae_tiling_enabled", action="store_true",
@@ -427,7 +451,8 @@ def main():
         frames_tensor, original_fps = extract_frames_from_video(
             args.video_path, 
             args.skip_first_frames, 
-            args.load_cap
+            args.load_cap,
+            args.prepend_frames
         )
         
         debug.log(f"Frame extraction time: {time.time() - start_time:.2f}s", category="general")
@@ -448,7 +473,12 @@ def main():
             debug.log(f"Applying temporal overlap with blending", category="generation")
             result = apply_temporal_overlap_blending(result, args.batch_size, args.temporal_overlap)
         debug.log(f"Result shape: {result.shape}, dtype: {result.dtype}", category="memory")
-        
+
+        if args.prepend_frames > 0:
+            debug.log(f"Removing prepended ({args.prepend_frames}) frames from the results)", category="generation")
+            result = result[args.prepend_frames:]
+            debug.log(f"Result shape after removing prepended frames: {result.shape}", category="info")
+
         # After generation_time calculation, choose saving method
         if args.output_format == "png":
             # Ensure output treated as directory
