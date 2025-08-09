@@ -213,56 +213,51 @@ def save_frames_to_png(frames_tensor, output_dir, base_name):
 def apply_temporal_overlap_blending(frames_tensor, batch_size, overlap):
     """
     Blend frames with temporal overlap in pixel space and remove duplicates.
-
     Args:
         frames_tensor (torch.Tensor): [T, H, W, C], Float16 in [0,1]
         batch_size (int): Frames per batch used during generation
         overlap (int): Overlapping frames between consecutive batches
-
     Returns:
-        torch.Tensor: Blended frames [T, H, W, C]
+        torch.Tensor: Blended frames [T, H, W, C] with duplicates removed
     """
     T = frames_tensor.shape[0]
-    if overlap <= 0 or batch_size <= overlap or T <= overlap:
+    if overlap <= 0 or batch_size <= overlap or T <= batch_size:
         return frames_tensor
-
-    step = batch_size - overlap
-    if step <= 0:
-        return frames_tensor
-
+    
     device = frames_tensor.device
     dtype = frames_tensor.dtype
+    
+    output = frames_tensor[:batch_size]
+    input_pos = batch_size
+    
+    while input_pos < T:
+        remaining_frames = T - input_pos
+        current_batch_size = min(batch_size, remaining_frames)
+        
+        if current_batch_size <= overlap:
+            break
+            
+        current_batch = frames_tensor[input_pos:input_pos + current_batch_size]
+        
+        prev_tail = output[-overlap:]  # overlap frames from previous output
+        cur_head = current_batch[:overlap]  # overlap frames from current batch
+        
+        # Crossfade (clamping so that the blending only happens in the center of the overlap)
+        w_prev = torch.clamp(torch.linspace(2.0, -1.0, steps=overlap, device=device, dtype=dtype), 0.0, 1.0).view(overlap, 1, 1, 1)
 
-    # Start with the first window fully
-    first_end = min(batch_size, T)
-    output = frames_tensor[:first_end]
-
-    # Process subsequent overlapping windows
-    for start in range(step, T, step):
-        end = min(start + batch_size, T)
-
-        # Number of frames to blend (may be smaller on the last short window)
-        k = min(overlap, end - start)
-        if k > 0:
-            prev_tail = output[-k:]
-            cur_head = frames_tensor[start:start + k]
-
-            # Crossfade 
-            w_prev = torch.linspace(1.0, 0.0, steps=k, device=device, dtype=dtype).view(k, 1, 1, 1)
-            w_cur = 1.0 - w_prev
-            blended = prev_tail * w_prev + cur_head * w_cur
-
-            # Replace the last k frames with blended result
-            output = torch.cat([output[:-k], blended], dim=0)
-
-            # Append the non-overlapping remainder of current window
-            if start + k < end:
-                output = torch.cat([output, frames_tensor[start + k:end]], dim=0)
-        else:
-            # No overlap at the end
-            if start < end:
-                output = torch.cat([output, frames_tensor[start:end]], dim=0)
-
+        w_cur = 1.0 - w_prev
+        blended = prev_tail * w_prev + cur_head * w_cur
+        
+        # Replace the last overlap frames in output with blended result
+        output = torch.cat([output[:-overlap], blended], dim=0)
+        
+        # Append the non-overlapping part of current batch (if any)
+        if overlap < current_batch_size:
+            non_overlapping = current_batch[overlap:]
+            output = torch.cat([output, non_overlapping], dim=0)
+        
+        input_pos += current_batch_size
+    
     return output
 
 
