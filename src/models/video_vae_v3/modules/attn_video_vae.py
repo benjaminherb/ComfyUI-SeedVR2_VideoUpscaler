@@ -1284,8 +1284,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         latent_tile_size = max(1, tile_size // scale_factor)
         latent_tile_overlap = max(0, min((tile_overlap // scale_factor), latent_tile_size - 1))
 
-        stride_h = max(1, latent_tile_size - latent_tile_overlap)
-        stride_w = max(1, latent_tile_size - latent_tile_overlap)
+        stride = max(1, latent_tile_size - latent_tile_overlap)
 
         H_lat_total = (H + scale_factor - 1) // scale_factor
         W_lat_total = (W + scale_factor - 1) // scale_factor
@@ -1293,15 +1292,19 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         result = None
         count = None
 
-        tile_id = 0
-        num_tiles_h = (H_lat_total + stride_h - 1) // stride_h
-        num_tiles_w = (W_lat_total + stride_w - 1) // stride_w
-        num_tiles = max(1, num_tiles_h * num_tiles_w)
+        num_tiles = ((max(H - latent_tile_overlap, 1) + stride - 1) // stride) \
+                  * ((max(W - latent_tile_overlap, 1) + stride - 1) // stride)
 
-        for y_lat in range(0, H_lat_total, stride_h):
+        tile_id = 0
+        for y_lat in range(0, H_lat_total, stride):
             y_lat_end = min(y_lat + latent_tile_size, H_lat_total)
-            for x_lat in range(0, W_lat_total, stride_w):
+            for x_lat in range(0, W_lat_total, stride):
                 x_lat_end = min(x_lat + latent_tile_size, W_lat_total)
+
+                # Skip if fully within overlap of previous tiles
+                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_tile_overlap) or \
+                   (x_lat > 0 and (x_lat_end - x_lat) <= latent_tile_overlap):
+                    continue
 
                 # Map latent tile to output-space crop
                 y_out = y_lat * scale_factor
@@ -1365,9 +1368,9 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 result[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += et * blend_mask
                 count[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += blend_mask
 
-        result = result / count.clamp(min=1e-6) # normalize
+        result = result / count.clamp(min=1e-6)  # normalize
 
-        if x.shape[2] == 1: # single frame
+        if x.shape[2] == 1:  # single frame
             result = result.squeeze(2)
 
         return result
@@ -1388,8 +1391,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         latent_tile_size = max(1, tile_size // scale_factor)
         latent_tile_overlap = max(0, min((tile_overlap // scale_factor), latent_tile_size - 1))
 
-        stride_h = max(1, latent_tile_size - latent_tile_overlap)
-        stride_w = max(1, latent_tile_size - latent_tile_overlap)
+        stride = max(1, latent_tile_size - latent_tile_overlap)
 
         # Build a simple spatial blend mask in output space, guard division-by-zero
         blend_mask = torch.ones((1, 1, 1, tile_size, tile_size), device=z.device, dtype=z.dtype)
@@ -1406,15 +1408,19 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         result = None
         count = None
 
-        tile_id = 0
-        num_tiles_h = (H + stride_h - 1) // stride_h
-        num_tiles_w = (W + stride_w - 1) // stride_w
-        num_tiles = max(1, num_tiles_h * num_tiles_w)
+        num_tiles = ((max(H - latent_tile_overlap, 1) + stride - 1) // stride) \
+                  * ((max(W - latent_tile_overlap, 1) + stride - 1) // stride)
 
-        for y_lat in range(0, H, stride_h):
+        tile_id = 0
+        for y_lat in range(0, H, stride):
             y_lat_end = min(y_lat + latent_tile_size, H)
-            for x_lat in range(0, W, stride_w):
+            for x_lat in range(0, W, stride):
                 x_lat_end = min(x_lat + latent_tile_size, W)
+
+                # Skip if fully within overlap of previous tiles
+                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_tile_overlap) or \
+                   (x_lat > 0 and (x_lat_end - x_lat) <= latent_tile_overlap):
+                    continue
 
                 tile_id += 1
                 tile_latent = z[:, :, :, y_lat:y_lat_end, x_lat:x_lat_end]
@@ -1444,9 +1450,9 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile * current_blend_mask
                 count[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += current_blend_mask
 
-        result = result / count.clamp(min=1e-6) # normaliz
+        result = result / count.clamp(min=1e-6)  # normalize
 
-        if z.shape[2] == 1: # single frame
+        if z.shape[2] == 1:  # single frame
             result = result.squeeze(2)
 
         return result
