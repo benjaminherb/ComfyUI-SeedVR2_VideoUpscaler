@@ -1184,8 +1184,13 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             self.decoder.mid_block.attentions = torch.nn.ModuleList([None])
 
     @apply_forward_hook
-    def encode(self, x: torch.FloatTensor, return_dict: bool = True, preserve_vram: bool = False) -> AutoencoderKLOutput:
-        h = self.slicing_encode(x, preserve_vram=preserve_vram)
+    def encode(self, x: torch.FloatTensor, return_dict: bool = True, preserve_vram: bool = False, 
+               tiled: bool = False, tile_size: int = 512, tile_overlap: int = 64) -> AutoencoderKLOutput:
+        if tiled:
+            h = self.tiled_encode(x, tile_size=tile_size, tile_overlap=tile_overlap, preserve_vram=preserve_vram)
+        else:
+            h = self.slicing_encode(x, preserve_vram=preserve_vram)
+
         posterior = DiagonalGaussianDistribution(h)
 
         if not return_dict:
@@ -1266,7 +1271,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         else:
             return self._decode(z, preserve_vram=preserve_vram)
 
-    def tiled_encode(self, x: torch.Tensor, tile_size: int = 512, tile_overlap: int = 64) -> torch.Tensor:
+    def tiled_encode(self, x: torch.Tensor, tile_size: int = 512, tile_overlap: int = 64, preserve_vram: bool = False) -> torch.Tensor:
         r"""
         Encodes an input tensor `x` by splitting it into spatial tiles in latent space. Temporal is handled by `slicing_encode`.
         `tile_size` and `tile_overlap` are interpreted in output-space pixels and converted to latent-space.
@@ -1319,7 +1324,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                     category="vae",
                 )
 
-                encoded_tile = self.slicing_encode(tile_sample)
+                encoded_tile = self.slicing_encode(tile_sample, preserve_vram=preserve_vram)
 
                 # Initialize output size using first encoded tile
                 if result is None:

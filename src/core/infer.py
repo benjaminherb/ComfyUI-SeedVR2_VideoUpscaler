@@ -154,60 +154,31 @@ class VideoDiffusionInfer():
                 H = sample.shape[-2] if sample.ndim >= 4 else 0
                 W = sample.shape[-1] if sample.ndim >= 4 else 0
                 spatial_size = H * W
-                use_tiling = (
-                    hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled and
-                    spatial_size > 256 * 256  # threshold on output resolution
+                use_tiling = (hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled and
+                    spatial_size > 256 * 256)  # threshold on output resolution
+
+                out = self.vae.encode(
+                    sample,
+                    preserve_vram=preserve_vram,
+                    tiled=use_tiling,
+                    tile_size=self.vae_tile_size,
+                    tile_overlap=self.vae_tile_overlap,
                 )
 
-                if use_tiling:
-                    self.debug.log(
-                        f"Using VAE Tiled Encoding (Tile: {self.vae_tile_size}, Overlap: {self.vae_tile_overlap})",
-                        category="vae",
-                        force=True,
-                    )
-
-                    # Encode in spatial tiles (temporal handled inside)
-                    encoded_params = self.vae.tiled_encode(
-                        sample,
-                        tile_size=self.vae_tile_size,
-                        tile_overlap=self.vae_tile_overlap,
-                    )
-
-                    # Ensure 5D for consistency [B, C, F, H_lat, W_lat]
-                    if encoded_params.ndim == 4:
-                        encoded_params = encoded_params.unsqueeze(2)
-
-                    # Split into mean/logvar along channels and sample/mode
-                    c_total = encoded_params.shape[1]
-                    c_half = c_total // 2
-                    mean = encoded_params[:, :c_half]
-                    logvar = encoded_params[:, c_half:]
-                    if use_sample:
-                        std = (0.5 * logvar).exp()
-                        latent_cfirst = mean + std * torch.randn_like(mean)
-                    else:
-                        latent_cfirst = mean
-
-                    # Move channels last and apply scale/shift
-                    latent = rearrange(latent_cfirst, "b c ... -> b ... c")
-                    latent = (latent - shift) * scale
-                    latents.append(latent)
-
-                    # Light VRAM cleanup between tiles/groups
-                    clear_vram_cache(self.debug)
+                posterior = getattr(out, "latent_dist", getattr(out, "posterior", out))
+                if use_sample:
+                    latent = posterior.rsample() if hasattr(posterior, "rsample") else posterior.sample()
                 else:
-                    # Non-tiled path (original logic)
-                    if use_sample:
-                        latent = self.vae.encode(sample).latent
-                        # latent = self.vae.encode(sample, preserve_vram).latent
-                    else:
-                        # Deterministic vae encode, only used for i2v inference (optionally)
-                        latent = self.vae.encode(sample).posterior.mode().squeeze(2)
-                    latent = latent.unsqueeze(2) if latent.ndim == 4 else latent
-                    latent = rearrange(latent, "b c ... -> b ... c")
-                    # latent = optimized_channels_to_last(latent)
-                    latent = (latent - shift) * scale
-                    latents.append(latent)
+                    latent = posterior.mode()
+
+                # Ensure 5D then move channels last and apply scale/shift
+                if latent.ndim == 4:
+                    latent = latent.unsqueeze(2)
+                latent = rearrange(latent, "b c ... -> b ... c")
+                latent = (latent - shift) * scale
+                latents.append(latent)
+
+                clear_vram_cache(self.debug)
 
             # Ungroup back to individual latent with the original order.
             if self.config.vae.grouping:
