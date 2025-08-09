@@ -409,12 +409,14 @@ def _gpu_processing(frames_tensor, device_list, args):
 
 class OneOrTwoValues(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        if not isinstance(values, list):
-            values = [values]
-            
+        if isinstance(values, str):
+            if ',' in values:
+                values = [v.strip() for v in values.split(',') if v.strip()]
+            else:
+                values = values.split()
+        
         if len(values) not in [1, 2]:
             parser.error(f"{option_string} requires 1 or 2 arguments")
-        
         try:
             result = tuple(int(v) for v in values)
             if len(result) == 1:
