@@ -47,7 +47,7 @@ from src.utils.debug import Debug
 debug = Debug(enabled=False)  # Default to disabled, can be enabled via CLI
 
 
-def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, padding_frames=0):
+def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, prepend_frames=0):
     """
     Extract frames from video and convert to tensor format
     
@@ -55,7 +55,6 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, pa
         video_path (str): Path to input video
         skip_first_frame (bool): Skip the first frame during extraction
         load_cap (int): Maximum number of frames to load (None for all)
-        padding_frames (int): Number of frames to add at start and end for padding
         
     Returns:
         torch.Tensor: Frames tensor in format [T, H, W, C] (Float16, normalized 0-1)
@@ -81,8 +80,8 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, pa
         debug.log(f"Will skip first {skip_first_frames} frames", category="info")
     if load_cap:
         debug.log(f"Will load maximum {load_cap} frames", category="info")
-    if padding_frames:
-        debug.log(f"Will add {padding_frames} padding frames at start and end", category="info")
+    if prepend_frames:
+        debug.log(f"Will prepend {prepend_frames} frames to the video", category="info")
     
     frames = []
     frame_idx = 0
@@ -127,14 +126,10 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, pa
     
     debug.log(f"Extracted {len(frames)} frames", category="success")
 
-    # Add padding frames if requested (reverse of the first/last few frames)
-    if padding_frames > 0:
-        padding_count = min(padding_frames, len(frames))
-        # Add reversed frames at the beginning
-        start_padding = frames[:padding_count][::-1]  # Reverse the first frames
-        # Add reversed frames at the end  
-        end_padding = frames[-padding_count:][::-1]   # Reverse the last frames
-        frames = start_padding + frames + end_padding
+    # preprend frames if requested (reverse of the first few frames)
+    if prepend_frames > 0:
+        prepend_frames = min(prepend_frames, len(frames))
+        frames = frames[-prepend_frames:] + frames
 
     # Convert to tensor [T, H, W, C] and cast to Float16 for ComfyUI compatibility
     frames_tensor = torch.from_numpy(np.stack(frames)).to(torch.float16)
@@ -455,8 +450,8 @@ def parse_arguments():
                         help="Use non-blocking memory transfers for VRAM optimization")
     parser.add_argument("--temporal_overlap", type=int, default=0,
                         help="Temporal overlap for processing (default: 0, no temporal overlap)")
-    parser.add_argument("--padding_frames", type=int, default=0,
-                        help="Number of frames to add as padding at start and end of video (default: 0). This can help with artifacts at the beginning and end of the video and are removed after processing")
+    parser.add_argument("--prepend_frames", type=int, default=0,
+                        help="Number of frames to prepend to the video (default: 0). This can help with artifacts at the start of the video and are removed after processing")
     parser.add_argument("--offload_io_components", action="store_true",
                         help="Offload IO components to CPU for VRAM optimization")
     parser.add_argument("--vae_tiling_enabled", action="store_true",
@@ -502,7 +497,7 @@ def main():
             args.video_path, 
             args.skip_first_frames, 
             args.load_cap,
-            args.padding_frames
+            args.prepend_frames
         )
         
         debug.log(f"Frame extraction time: {time.time() - start_time:.2f}s", category="general")
@@ -524,13 +519,10 @@ def main():
             result = apply_temporal_overlap_blending(result, args.batch_size, args.temporal_overlap)
         debug.log(f"Result shape: {result.shape}, dtype: {result.dtype}", category="memory")
 
-        if args.padding_frames > 0:
-            debug.log(f"Removing padding frames ({args.padding_frames} from start and end)", category="generation")
-            # Remove padding frames from both start and end
-            padding_count = min(args.padding_frames, result.shape[0] // 2)
-            if padding_count > 0:
-                result = result[padding_count:-padding_count]
-                debug.log(f"Result shape after removing padding frames: {result.shape}", category="info")
+        if args.prepend_frames > 0:
+            debug.log(f"Removing prepended ({args.prepend_frames}) frames from the results)", category="generation")
+            result = result[args.prepend_frames:]
+            debug.log(f"Result shape after removing prepended frames: {result.shape}", category="info")
 
         # After generation_time calculation, choose saving method
         if args.output_format == "png":
