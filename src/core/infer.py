@@ -264,6 +264,7 @@ class VideoDiffusionInfer():
                             latent,
                             tile_size=self.vae_tile_size,
                             tile_overlap=self.vae_tile_overlap,
+                            preserve_vram=preserve_vram,
                         )
                     
                     if hasattr(self.vae, "postprocess"):
@@ -291,7 +292,7 @@ class VideoDiffusionInfer():
                     if latent.ndim == 5:
                         latent = latent.squeeze(2)
                     with torch.autocast("cuda", torch.float16, enabled=True):
-                            sample = self.vae.decode(latent).sample
+                            sample = self.vae.decode(latent, preserve_vram=True).sample
                     if hasattr(self.vae, "postprocess"):
                         sample = self.vae.postprocess(sample)
                     samples.append(sample)

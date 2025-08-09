@@ -1375,7 +1375,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
         return result
 
-    def tiled_decode(self, z: torch.Tensor, tile_size: int = 512, tile_overlap: int = 64) -> torch.Tensor:
+    def tiled_decode(self, z: torch.Tensor, tile_size: int = 512, tile_overlap: int = 64, preserve_vram: bool = False) -> torch.Tensor:
         r"""
         Decodes a latent tensor `z` by splitting it into spatial tiles only. Temporal is handled by `slicing_decode`.
         """
@@ -1425,7 +1425,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 tile_id += 1
                 tile_latent = z[:, :, :, y_lat:y_lat_end, x_lat:x_lat_end]
 
-                decoded_tile = self.slicing_decode(tile_latent)
+                decoded_tile = self.slicing_decode(tile_latent, preserve_vram=preserve_vram)
 
                 # Initialize result tensors using actual decoded shapes on first tile
                 if result is None:
