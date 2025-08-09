@@ -407,6 +407,21 @@ def _gpu_processing(frames_tensor, device_list, args):
     
     return result_tensor
 
+class OneOrTwoValues(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        if not isinstance(values, list):
+            values = [values]
+            
+        if len(values) not in [1, 2]:
+            parser.error(f"{option_string} requires 1 or 2 arguments")
+        
+        try:
+            result = tuple(int(v) for v in values)
+            if len(result) == 1:
+                result = (result[0], result[0])  # Convert single value to (h, w)
+            setattr(namespace, self.dest, result)
+        except ValueError:
+            parser.error(f"{option_string} arguments must be integers")
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -456,10 +471,10 @@ def parse_arguments():
                         help="Offload IO components to CPU for VRAM optimization")
     parser.add_argument("--vae_tiling_enabled", action="store_true",
                         help="Enable VAE tiling for improved VRAM usage")
-    parser.add_argument("--vae_tile_size", type=int, default=512,
-                        help="VAE tile size for tiled decoding (default: 512). Only used if --vae_tiling_enabled is set")
-    parser.add_argument("--vae_tile_overlap", type=int, default=128,
-                        help="VAE tile overlap for tiled decoding (default: 128). Only used if --vae_tiling_enabled is set")
+    parser.add_argument("--vae_tile_size", action=OneOrTwoValues, nargs='+', default=(512, 512),
+                        help="VAE tile size (default: 512). Use single integer or two integers 'h w'. Only used if --vae_tiling_enabled is set")
+    parser.add_argument("--vae_tile_overlap", action=OneOrTwoValues, nargs='+', default=(128, 128),
+                        help="VAE tile overlap (default: 128). Use single integer or two integers 'h w'. Only used if --vae_tiling_enabled is set")
     return parser.parse_args()
 
 
@@ -469,11 +484,15 @@ def main():
     
     # Parse arguments
     args = parse_arguments()
-    debug.enabled = args.debug  
+    debug.enabled = args.debug
     
     debug.log("Arguments:", category="setup")
     for key, value in vars(args).items():
         debug.log(f"  {key}: {value}", category="none")
+
+    if args.vae_tiling_enabled and (args.vae_tile_overlap[0] >= args.vae_tile_size[0] or args.vae_tile_overlap[1] >= args.vae_tile_size[1]):
+        print(f"Error: VAE tile overlap {args.vae_tile_overlap} must be smaller than tile size {args.vae_tile_size}")
+        sys.exit(1)
     
     # Show actual CUDA device visibility
     debug.log(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set (all)')}", category="device")

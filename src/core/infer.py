@@ -69,7 +69,7 @@ def optimized_channels_to_second(tensor):
 
 class VideoDiffusionInfer():
     def __init__(self, config: DictConfig, debug=None,  vae_tiling_enabled: bool = False, 
-                 vae_tile_size: int = 512, vae_tile_overlap: int = 64):
+                 vae_tile_size: Tuple[int, int] = (512, 512), vae_tile_overlap: Tuple[int, int] = (64, 64)):
         # Check if debug instance is available
         if debug is None:
             raise ValueError("Debug instance must be provided to VideoDiffusionInfer")
