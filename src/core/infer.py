@@ -144,15 +144,14 @@ class VideoDiffusionInfer():
             else:
                 batches = [sample.unsqueeze(0) for sample in samples]
 
-            spatial_size = latents[0].shape[1] * latents[0].shape[2]  # H * W of latent
-            use_tiling = (hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled and
-                spatial_size > 256 * 256)  # threshold on output resolution
+            use_tiling = (hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled)
             if use_tiling:
                 self.debug.log(f"Using VAE Tiled Encoding (Tile: {self.vae_tile_size}, Overlap: {self.vae_tile_overlap})", category="vae", force=True)
 
             # VAE process by each group.
             for sample in batches:
                 sample = sample.to(device, dtype)
+
                 if hasattr(self.vae, "preprocess"):
                     sample = self.vae.preprocess(sample)
 
@@ -202,11 +201,7 @@ class VideoDiffusionInfer():
             else:
                 latents = [latent.unsqueeze(0) for latent in latents]
 
-            # Check if tiling is enabled and if the latents are large enough to warrant it
-            # This is a heuristic, adjust the threshold if needed. 512*512 is a good starting point.
-            spatial_size = latents[0].shape[1] * latents[0].shape[2]  # H * W of latent
-            use_tiling = (hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled and
-                spatial_size > 32 * 32)  # threshold for latent resolution
+            use_tiling = (hasattr(self, 'vae_tiling_enabled') and self.vae_tiling_enabled)
             if use_tiling:
                 self.debug.log(f"Using VAE Tiled Decoding (Tile: {self.vae_tile_size}, Overlap: {self.vae_tile_overlap})", category="vae", force=True)
 

@@ -1200,8 +1200,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
     @apply_forward_hook
     def decode(self, z: torch.Tensor, preserve_vram: bool = False, return_dict: bool = True, 
-               tiled: bool = False, tile_size: int = 512, tile_overlap: int = 64
-    ) -> Union[DecoderOutput, torch.Tensor]:
+               tiled: bool = False, tile_size: int = 512, tile_overlap: int = 64) -> Union[DecoderOutput, torch.Tensor]:
 
         if tiled:
             decoded = self.tiled_decode(z, tile_size=tile_size, tile_overlap=tile_overlap, preserve_vram=preserve_vram)
@@ -1514,17 +1513,21 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         x = self.decode(z).sample
         return CausalAutoencoderOutput(x, z, p)
 
-    def encode(self, x: torch.FloatTensor, preserve_vram: bool = False) -> CausalEncoderOutput:
+    def encode(self, x: torch.FloatTensor, return_dict: bool = True, preserve_vram: bool = False, 
+               tiled: bool = False, tile_size: int = 512, tile_overlap: int = 64) -> CausalEncoderOutput:
         if x.ndim == 4:
             x = x.unsqueeze(2)
-        p = super().encode(x, preserve_vram=preserve_vram).latent_dist
+        p = super().encode(x, preserve_vram=preserve_vram, return_dict=return_dict, 
+                           tiled=tiled, tile_size=tile_size, tile_overlap=tile_overlap).latent_dist
         z = p.sample().squeeze(2)
         return CausalEncoderOutput(z, p)
 
-    def decode(self, z: torch.FloatTensor, preserve_vram: bool = False) -> CausalDecoderOutput:
+    def decode(self, z: torch.Tensor, preserve_vram: bool = False, return_dict: bool = True, 
+               tiled: bool = False, tile_size: int = 512, tile_overlap: int = 64) -> CausalDecoderOutput:
         if z.ndim == 4:
             z = z.unsqueeze(2)
-        x = super().decode(z, preserve_vram).sample.squeeze(2)
+        x = super().decode(z, preserve_vram=preserve_vram, return_dict=return_dict, 
+                           tiled=tiled, tile_size=tile_size, tile_overlap=tile_overlap).sample.squeeze(2)
         return CausalDecoderOutput(x)
 
     def preprocess(self, x: torch.Tensor):
