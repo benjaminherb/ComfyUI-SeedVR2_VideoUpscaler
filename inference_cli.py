@@ -407,16 +407,19 @@ def _gpu_processing(frames_tensor, device_list, args):
     
     return result_tensor
 
+
 class OneOrTwoValues(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        if isinstance(values, str):
+        if len(values) not in [1, 2]:
+            parser.error(f"{option_string} requires 1 or 2 arguments")
+
+        if len(values) == 1:
+            values = values[0]
             if ',' in values:
                 values = [v.strip() for v in values.split(',') if v.strip()]
             else:
                 values = values.split()
         
-        if len(values) not in [1, 2]:
-            parser.error(f"{option_string} requires 1 or 2 arguments")
         try:
             result = tuple(int(v) for v in values)
             if len(result) == 1:
@@ -424,6 +427,7 @@ class OneOrTwoValues(argparse.Action):
             setattr(namespace, self.dest, result)
         except ValueError:
             parser.error(f"{option_string} arguments must be integers")
+
 
 def parse_arguments():
     """Parse command line arguments"""
