@@ -1199,10 +1199,14 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         return AutoencoderKLOutput(latent_dist=posterior)
 
     @apply_forward_hook
-    def decode(
-        self, z: torch.Tensor, preserve_vram: bool = False, return_dict: bool = True
+    def decode(self, z: torch.Tensor, preserve_vram: bool = False, return_dict: bool = True, 
+               tiled: bool = False, tile_size: int = 512, tile_overlap: int = 64
     ) -> Union[DecoderOutput, torch.Tensor]:
-        decoded = self.slicing_decode(z, preserve_vram=preserve_vram)
+
+        if tiled:
+            decoded = self.tiled_decode(z, tile_size=tile_size, tile_overlap=tile_overlap, preserve_vram=preserve_vram)
+        else:
+            decoded = self.slicing_decode(z, preserve_vram=preserve_vram)
 
         if not return_dict:
             return (decoded,)
