@@ -309,16 +309,21 @@ def _gpu_processing(frames_tensor, device_list, args):
     num_devices = len(device_list)
     total_frames = frames_tensor.shape[0]
     
-    # Create overlapping chunks if temporal overlap is enabled (for multi GPU)
+    # Create overlapping chunks (for multi GPU); ensures every chunk is 
+    # a multiple of batch_size (except last one) to avoid blending issues
     if args.temporal_overlap > 0 and num_devices > 1:
-        base_chunk_size = total_frames // num_devices
+        chunk_with_overlap = total_frames // num_devices + args.temporal_overlap
+        if args.batch_size > 1:
+            chunk_with_overlap = ((chunk_with_overlap + args.batch_size - 1) // args.batch_size) * args.batch_size
+        base_chunk_size = chunk_with_overlap - args.temporal_overlap
+
         chunks = []
         for i in range(num_devices):
             start_idx = i * base_chunk_size
             if i == num_devices - 1: # last chunk/device
                 end_idx = total_frames
             else:
-                end_idx = min(start_idx + base_chunk_size + args.temporal_overlap, total_frames)
+                end_idx = min(start_idx + chunk_with_overlap, total_frames)
             chunks.append(frames_tensor[start_idx:end_idx])
     else:
         chunks = torch.chunk(frames_tensor, num_devices, dim=0)
