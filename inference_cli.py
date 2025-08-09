@@ -307,8 +307,21 @@ def _worker_process(proc_idx, device_id, frames_np, shared_args, return_queue):
 def _gpu_processing(frames_tensor, device_list, args):
     """Split frames and process them in parallel on multiple GPUs."""
     num_devices = len(device_list)
-    # split frames tensor along time dimension
-    chunks = torch.chunk(frames_tensor, num_devices, dim=0)
+    total_frames = frames_tensor.shape[0]
+    
+    # Create overlapping chunks if temporal overlap is enabled (for multi GPU)
+    if args.temporal_overlap > 0 and num_devices > 1:
+        base_chunk_size = total_frames // num_devices
+        chunks = []
+        for i in range(num_devices):
+            start_idx = i * base_chunk_size
+            if i == num_devices - 1: # last chunk/device
+                end_idx = total_frames
+            else:
+                end_idx = min(start_idx + base_chunk_size + args.temporal_overlap, total_frames)
+            chunks.append(frames_tensor[start_idx:end_idx])
+    else:
+        chunks = torch.chunk(frames_tensor, num_devices, dim=0)
 
     manager = mp.Manager()
     return_queue = manager.Queue()
@@ -353,8 +366,38 @@ def _gpu_processing(frames_tensor, device_list, args):
     for p in workers:
         p.join()
 
-    # Concatenate results in original order
-    result_tensor = torch.from_numpy(np.concatenate(results_np, axis=0)).to(torch.float16)
+    # Concatenate results with overlap handling
+    if args.temporal_overlap > 0 and num_devices > 1:
+        # Reconstruct results considering overlap
+        result_list = []
+        overlap = args.temporal_overlap
+        
+        for idx, res_np in enumerate(results_np):
+            if idx == 0:
+                # First chunk: keep all frames
+                result_list.append(torch.from_numpy(res_np).to(torch.float16))
+            elif idx == num_devices - 1:
+                # Last chunk: skip overlap frames at the beginning
+                chunk_tensor = torch.from_numpy(res_np).to(torch.float16)
+                if chunk_tensor.shape[0] > overlap:
+                    result_list.append(chunk_tensor[overlap:])
+                else:
+                    # If chunk is smaller than overlap, skip it entirely
+                    pass
+            else:
+                # Middle chunks: skip overlap at beginning, keep overlap at end
+                chunk_tensor = torch.from_numpy(res_np).to(torch.float16)
+                if chunk_tensor.shape[0] > overlap:
+                    result_list.append(chunk_tensor[overlap:])
+        
+        if result_list:
+            result_tensor = torch.cat(result_list, dim=0)
+        else:
+            result_tensor = torch.from_numpy(results_np[0]).to(torch.float16)
+    else:
+        # Original concatenation without overlap handling
+        result_tensor = torch.from_numpy(np.concatenate(results_np, axis=0)).to(torch.float16)
+    
     return result_tensor
 
 
