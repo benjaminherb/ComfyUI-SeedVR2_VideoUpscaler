@@ -95,9 +95,11 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, pr
         # Skip first frame if requested
         if frame_idx < skip_first_frames:
             frame_idx += 1
-            debug.log(f"Skipped first frame", category="info")
             continue
-        
+
+        if skip_first_frames > 0 and frame_idx == skip_first_frames:
+            debug.log(f"Skipped first {skip_first_frames} frames", category="info") 
+
         # Check load cap
         if load_cap is not None and load_cap > 0 and frames_loaded >= load_cap:
             debug.log(f"Reached load cap of {load_cap} frames", category="info")
