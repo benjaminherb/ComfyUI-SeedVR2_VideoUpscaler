@@ -1292,8 +1292,8 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         result = None
         count = None
 
-        num_tiles = ((max(H - latent_tile_overlap, 1) + stride - 1) // stride) \
-                  * ((max(W - latent_tile_overlap, 1) + stride - 1) // stride)
+        num_tiles = ((max(H_lat_total - latent_tile_overlap, 1) + stride - 1) // stride) \
+                  * ((max(W_lat_total - latent_tile_overlap, 1) + stride - 1) // stride)
 
         tile_id = 0
         for y_lat in range(0, H_lat_total, stride):
