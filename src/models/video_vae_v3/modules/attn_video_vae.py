@@ -1253,7 +1253,12 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 encoded_slices.append(
                     self._encode(x_slices[x_idx], memory_state=MemoryState.ACTIVE, preserve_vram=preserve_vram)
                 )
-            return torch.cat(encoded_slices, dim=2)
+            out = torch.cat(encoded_slices, dim=2)
+            # fix memory leak
+            for m in self.modules():
+                if isinstance(m, InflatedCausalConv3d):
+                    m.memory = None
+            return out
         else:
             return self._encode(x, preserve_vram=preserve_vram)
 
