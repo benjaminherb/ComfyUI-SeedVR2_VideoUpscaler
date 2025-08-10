@@ -244,9 +244,17 @@ def apply_temporal_overlap_blending(frames_tensor, batch_size, overlap):
         prev_tail = output[-overlap:]  # overlap frames from previous output
         cur_head = current_batch[:overlap]  # overlap frames from current batch
         
-        # Crossfade (clamping so that the blending only happens in the center of the overlap)
-        w_prev = torch.clamp(torch.linspace(2.0, -1.0, steps=overlap, device=device, dtype=dtype), 0.0, 1.0).view(overlap, 1, 1, 1)
+        # Smooth crossfade while avoiding the first and last frames (which often have more artifacts)
+        if overlap >= 3:
+            t = torch.linspace(0.0, 1.0, steps=overlap, device=device, dtype=dtype)
+            blend_start = 1.0 / 3.0
+            blend_end = 2.0 / 3.0
+            u = ((t - blend_start) / (blend_end - blend_start)).clamp(0.0, 1.0)
+            w_prev_1d = 0.5 + 0.5 * torch.cos(torch.pi * u)  # Hann window
+        else: # Linear fallback for small overlaps:
+            w_prev_1d = torch.linspace(1.0, 0, steps=overlap, device=device, dtype=dtype)
 
+        w_prev = w_prev_1d.view(overlap, 1, 1, 1)
         w_cur = 1.0 - w_prev
         blended = prev_tail * w_prev + cur_head * w_cur
         
