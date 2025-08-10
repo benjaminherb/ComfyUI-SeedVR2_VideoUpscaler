@@ -1353,39 +1353,39 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                     )
                     count = torch.zeros_like(result)
 
-                # Effective placement sizes (guard against edge rounding)
                 eff_h_lat = min(y_lat_end - y_lat, encoded_tile.shape[3], result.shape[3] - y_lat)
                 eff_w_lat = min(x_lat_end - x_lat, encoded_tile.shape[4], result.shape[4] - x_lat)
-                if eff_h_lat <= 0 or eff_w_lat <= 0:
-                    continue
 
                 et = encoded_tile[:, :, : result.shape[2], :eff_h_lat, :eff_w_lat]
 
-                # Build blend mask in latent space based on latent overlap
+                # Build faded masks
                 ov_h = max(0, min(latent_overlap_h, eff_h_lat - 1))
                 ov_w = max(0, min(latent_overlap_w, eff_w_lat - 1))
-                blend_mask = torch.ones((1, 1, 1, eff_h_lat, eff_w_lat), device=et.device, dtype=et.dtype)
-                # Apply fades only on interior edges (avoid fading on edges)
+                weight_h = torch.ones((eff_h_lat,), device=et.device, dtype=et.dtype)
+                weight_w = torch.ones((eff_w_lat,), device=et.device, dtype=et.dtype)
+
+                # Apply fades only on interior edges (avoid fading on outer image borders)
                 top_edge = (y_lat == 0)
                 bottom_edge = (y_lat_end == H_lat_total)
                 left_edge = (x_lat == 0)
                 right_edge = (x_lat_end == W_lat_total)
+
                 if ov_h > 0:
-                    denom_h = max(1, ov_h - 1)
-                    for i in range(ov_h):
-                        fade = i / denom_h if denom_h > 0 else 0.0
-                        if not top_edge:
-                            blend_mask[..., i, :] *= fade
-                        if not bottom_edge:
-                            blend_mask[..., -1 - i, :] *= fade
+                    t_h = torch.linspace(0, 1, steps=ov_h, device=et.device, dtype=et.dtype)
+                    ramp_h = 0.5 - 0.5 * torch.cos(t_h * torch.pi)  # Hann ramp 0->1
+                    if not top_edge:
+                        weight_h[:ov_h] = ramp_h
+                    if not bottom_edge:
+                        weight_h[-ov_h:] = 1 - ramp_h
                 if ov_w > 0:
-                    denom_w = max(1, ov_w - 1)
-                    for i in range(ov_w):
-                        fade = i / denom_w if denom_w > 0 else 0.0
-                        if not left_edge:
-                            blend_mask[..., :, i] *= fade
-                        if not right_edge:
-                            blend_mask[..., :, -1 - i] *= fade
+                    t_w = torch.linspace(0, 1, steps=ov_w, device=et.device, dtype=et.dtype)
+                    ramp_w = 0.5 - 0.5 * torch.cos(t_w * torch.pi)  # Hann ramp 0->1
+                    if not left_edge:
+                        weight_w[:ov_w] = ramp_w
+                    if not right_edge:
+                        weight_w[-ov_w:] = 1 - ramp_w
+
+                blend_mask = weight_h.view(1, 1, 1, eff_h_lat, 1) * weight_w.view(1, 1, 1, 1, eff_w_lat)
 
                 result[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += et * blend_mask
                 count[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += blend_mask
@@ -1420,22 +1420,6 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
         stride_h = max(1, latent_tile_h - latent_overlap_h)
         stride_w = max(1, latent_tile_w - latent_overlap_w)
-
-        # Build a simple spatial blend mask in output space, guard division-by-zero
-        blend_mask = torch.ones((1, 1, 1, tile_h, tile_w), device=z.device, dtype=z.dtype)
-        if overlap_h > 0 or overlap_w > 0:
-            if overlap_h > 0:
-                denom_h = max(1, overlap_h - 1)
-                for i in range(overlap_h):
-                    fade = i / denom_h
-                    blend_mask[..., i, :] *= fade
-                    blend_mask[..., -1 - i, :] *= fade
-            if overlap_w > 0:
-                denom_w = max(1, overlap_w - 1)
-                for i in range(overlap_w):
-                    fade = i / denom_w
-                    blend_mask[..., :, i] *= fade
-                    blend_mask[..., :, -1 - i] *= fade
 
         # Allocate later using first decoded results
         result = None
@@ -1477,11 +1461,40 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                     category="vae",
                 )
 
-                current_blend_mask = blend_mask[..., : (y_out_end - y_out), : (x_out_end - x_out)]
+                h_out = y_out_end - y_out
+                w_out = x_out_end - x_out
 
-                # Place entire temporal span produced by slicing_decode
-                result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile * current_blend_mask
-                count[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += current_blend_mask
+                # Build faded masks
+                ov_h_out = max(0, min(overlap_h, h_out - 1))
+                ov_w_out = max(0, min(overlap_w, w_out - 1))
+                weight_h = torch.ones((h_out,), device=decoded_tile.device, dtype=decoded_tile.dtype)
+                weight_w = torch.ones((w_out,), device=decoded_tile.device, dtype=decoded_tile.dtype)
+
+                # Apply fades only on interior edges (avoid fading on outer image borders)
+                top_edge = (y_lat == 0)
+                bottom_edge = (y_lat_end == H)
+                left_edge = (x_lat == 0)
+                right_edge = (x_lat_end == W)
+
+                if ov_h_out > 0:
+                    t_h = torch.linspace(0, 1, steps=ov_h_out, device=decoded_tile.device, dtype=decoded_tile.dtype)
+                    ramp_h = 0.5 - 0.5 * torch.cos(t_h * torch.pi)  # Hann ramp 0->1
+                    if not top_edge:
+                        weight_h[:ov_h_out] = ramp_h
+                    if not bottom_edge:
+                        weight_h[-ov_h_out:] = 1 - ramp_h
+                if ov_w_out > 0:
+                    t_w = torch.linspace(0, 1, steps=ov_w_out, device=decoded_tile.device, dtype=decoded_tile.dtype)
+                    ramp_w = 0.5 - 0.5 * torch.cos(t_w * torch.pi)  # Hann ramp 0->1
+                    if not left_edge:
+                        weight_w[:ov_w_out] = ramp_w
+                    if not right_edge:
+                        weight_w[-ov_w_out:] = 1 - ramp_w
+
+                blend_mask = weight_h.view(1, 1, 1, h_out, 1) * weight_w.view(1, 1, 1, 1, w_out)
+
+                result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile * blend_mask
+                count[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += blend_mask
 
         result = result / count.clamp(min=1e-6)  # normalize
 
