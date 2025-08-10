@@ -505,27 +505,17 @@ def generation_loop(runner, images, cfg_scale=1.0, seed=666, res_w=720, batch_si
             
             debug.log(f"Block {block_num}/{total_blocks}: batch_samples {block_start}-{block_end-1}", category="general")
             
-            # Charger le bloc en VRAM
             current_block = []
             for i in range(block_start, block_end):
-                current_block.append(batch_samples[i].to(device))
+                current_block.append(batch_samples[i])
             
-            # Concatener en VRAM (rapide)
             block_result = torch.cat(current_block, dim=0)
-            
-            # Convertir en Float16 sur GPU
-            #if block_result.dtype != torch.float16:
-            #    block_result = block_result.to(torch.float16)
-            
-            # Copier directement dans le tensor final (pas de concatenation!)
             block_frames = block_result.shape[0]
-            final_video_images[current_idx:current_idx + block_frames] = block_result.to("cpu")
+            final_video_images[current_idx:current_idx + block_frames] = block_result
             current_idx += block_frames
             
-            # Nettoyage immédiat VRAM
+            # Clean up current block memory
             del current_block, block_result
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
             
         debug.log(f"Memory pre-allocation completed for output tensor: {final_video_images.shape}", category="success")
         debug.log("Pre-allocation ensures contiguous memory for final video output", category="info")
