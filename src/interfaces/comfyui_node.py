@@ -97,6 +97,24 @@ class SeedVR2:
                     "default": False,
                     "tooltip": "Show detailed memory usage and timing information during generation."
                 }),
+                "tiled_vae": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Use tiled VAE; slower but uses drastically less VRAM"
+                }),
+                "vae_tile_size": ("INT", {
+                    "default": 512,
+                    "min": 256,
+                    "max": 2048,
+                    "step": 256,
+                    "tooltip": "VAE tile size"
+                }),
+                "vae_tile_overlap": ("INT", {
+                    "default": 64,
+                    "min": 0,
+                    "max": 256,
+                    "step": 64,
+                    "tooltip": "VAE tile overlap"
+                }),
             },
             "optional": {
                 "block_swap_config": ("block_swap_config", {
@@ -113,6 +131,7 @@ class SeedVR2:
 
     def execute(self, images: torch.Tensor, model: str, seed: int, new_resolution: int, 
         batch_size: int, preserve_vram: bool, cache_model: bool, enable_debug: bool,
+        tiled_vae: bool, vae_tile_size: int, vae_tile_overlap: int,
         block_swap_config=None) -> Tuple[torch.Tensor]:
         """Execute SeedVR2 video upscaling with progress reporting"""
         
@@ -140,7 +159,8 @@ class SeedVR2:
         cfg_scale = 1.0
         try:
             return self._internal_execute(images, model, seed, new_resolution, cfg_scale, 
-                                        batch_size, preserve_vram, temporal_overlap, 
+                                        batch_size, tiled_vae, vae_tile_size, vae_tile_overlap, 
+                                        preserve_vram, temporal_overlap, 
                                         cache_model, block_swap_config)
         except Exception as e:
             self.cleanup(force_ram_cleanup=True, cache_model=cache_model, debug=self.debug)
@@ -275,6 +295,7 @@ class SeedVR2:
 
 
     def _internal_execute(self, images, model, seed, new_resolution, cfg_scale, batch_size, 
+                 tiled_vae, vae_tile_size, vae_tile_overlap,
                  preserve_vram, temporal_overlap, cache_model, block_swap_config):
         """Internal execution logic with progress tracking"""
         
@@ -300,6 +321,9 @@ class SeedVR2:
             model, get_base_cache_dir(), preserve_vram, debug,
             cache_model=cache_model,
             block_swap_config=block_swap_config,
+            vae_tiling_enabled=tiled_vae,
+            vae_tile_size=(vae_tile_size, vae_tile_size),
+            vae_tile_overlap=(vae_tile_overlap, vae_tile_overlap),
             cached_runner=self.runner if cache_model else None
         )
         
