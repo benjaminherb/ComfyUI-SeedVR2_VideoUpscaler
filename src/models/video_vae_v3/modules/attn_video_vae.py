@@ -1351,18 +1351,18 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                         device=encoded_tile.device,
                         dtype=encoded_tile.dtype,
                     )
-                    count = torch.zeros_like(result)
+                    count = torch.zeros((1, 1, 1, H_lat_total, W_lat_total), device=encoded_tile.device, dtype=encoded_tile.dtype)
 
                 eff_h_lat = min(y_lat_end - y_lat, encoded_tile.shape[3], result.shape[3] - y_lat)
                 eff_w_lat = min(x_lat_end - x_lat, encoded_tile.shape[4], result.shape[4] - x_lat)
 
-                et = encoded_tile[:, :, : result.shape[2], :eff_h_lat, :eff_w_lat]
+                encoded_tile = encoded_tile[:, :, : result.shape[2], :eff_h_lat, :eff_w_lat]
 
                 # Build faded masks
                 ov_h = max(0, min(latent_overlap_h, eff_h_lat - 1))
                 ov_w = max(0, min(latent_overlap_w, eff_w_lat - 1))
-                weight_h = torch.ones((eff_h_lat,), device=et.device, dtype=et.dtype)
-                weight_w = torch.ones((eff_w_lat,), device=et.device, dtype=et.dtype)
+                weight_h = torch.ones((eff_h_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype)
+                weight_w = torch.ones((eff_w_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype)
 
                 # Apply fades only on interior edges (avoid fading on outer image borders)
                 top_edge = (y_lat == 0)
@@ -1371,24 +1371,28 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 right_edge = (x_lat_end == W_lat_total)
 
                 if ov_h > 0:
-                    t_h = torch.linspace(0, 1, steps=ov_h, device=et.device, dtype=et.dtype)
+                    t_h = torch.linspace(0, 1, steps=ov_h, device=encoded_tile.device, dtype=encoded_tile.dtype)
                     ramp_h = 0.5 - 0.5 * torch.cos(t_h * torch.pi)  # Hann ramp 0->1
                     if not top_edge:
                         weight_h[:ov_h] = ramp_h
                     if not bottom_edge:
                         weight_h[-ov_h:] = 1 - ramp_h
                 if ov_w > 0:
-                    t_w = torch.linspace(0, 1, steps=ov_w, device=et.device, dtype=et.dtype)
+                    t_w = torch.linspace(0, 1, steps=ov_w, device=encoded_tile.device, dtype=encoded_tile.dtype)
                     ramp_w = 0.5 - 0.5 * torch.cos(t_w * torch.pi)  # Hann ramp 0->1
                     if not left_edge:
                         weight_w[:ov_w] = ramp_w
                     if not right_edge:
                         weight_w[-ov_w:] = 1 - ramp_w
 
-                blend_mask = weight_h.view(1, 1, 1, eff_h_lat, 1) * weight_w.view(1, 1, 1, 1, eff_w_lat)
+                # Separable application (no 2D mask to save memory)
+                weight_h_5d = weight_h.view(1, 1, 1, eff_h_lat, 1)
+                weight_w_5d = weight_w.view(1, 1, 1, 1, eff_w_lat)
+                encoded_tile.mul_(weight_h_5d)
+                encoded_tile.mul_(weight_w_5d)
 
-                result[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += et * blend_mask
-                count[:, :, : et.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += blend_mask
+                result[:, :, : encoded_tile.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += encoded_tile
+                count[:, :, :, y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat].addcmul_(weight_h_5d, weight_w_5d)
 
         result = result / count.clamp(min=1e-6)  # normalize
 
@@ -1450,7 +1454,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                     output_h = H * scale_factor
                     output_w = W * scale_factor
                     result = torch.zeros((b_out, c_out, out_f_tile, output_h, output_w), device=decoded_tile.device, dtype=decoded_tile.dtype)
-                    count = torch.zeros_like(result)
+                    count = torch.zeros((1, 1, 1, output_h, output_w), device=decoded_tile.device, dtype=decoded_tile.dtype)
 
                 # Corresponding output-space placement
                 y_out, y_out_end = y_lat * scale_factor, y_lat_end * scale_factor
@@ -1491,10 +1495,15 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                     if not right_edge:
                         weight_w[-ov_w_out:] = 1 - ramp_w
 
-                blend_mask = weight_h.view(1, 1, 1, h_out, 1) * weight_w.view(1, 1, 1, 1, w_out)
+                # Separable application (no 2D mask to save memory)
+                weight_h_5d = weight_h.view(1, 1, 1, h_out, 1)
+                weight_w_5d = weight_w.view(1, 1, 1, 1, w_out)
+                decoded_tile.mul_(weight_h_5d)
+                decoded_tile.mul_(weight_w_5d)
 
-                result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile * blend_mask
-                count[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += blend_mask
+                # Accumulate into result/count
+                result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile
+                count[:, :, :, y_out:y_out_end, x_out:x_out_end].addcmul_(weight_h_5d, weight_w_5d)
 
         result = result / count.clamp(min=1e-6)  # normalize
 
