@@ -12,6 +12,7 @@ import time
 from typing import Tuple, Optional
 from src.common.cache import Cache
 from src.models.dit_v2.rope import RotaryEmbeddingBase
+from ..common.logger import logger
 
 try:
     from comfy import model_management as mm
@@ -20,29 +21,39 @@ except:
     COMFYUI_AVAILABLE = False
     pass
     
+_VRAM_INFO = None
+
 def get_basic_vram_info():
-    """🔍 Méthode basique avec PyTorch natif"""
-    if not torch.cuda.is_available():
-        return {"error": "CUDA not available"}
-    
-    # Mémoire libre et totale (en bytes)
-    free_memory, total_memory = torch.cuda.mem_get_info()
-    
-    # Conversion en GB
-    free_gb = free_memory / (1024**3)
-    total_gb = total_memory / (1024**3)
-    
-    return {
-        "free_gb": free_gb,
-        "total_gb": total_gb
-    }
+    global _VRAM_INFO
+    if _VRAM_INFO is None:
+        try:
+            free_memory, total_memory = torch.cuda.mem_get_info()
+            _VRAM_INFO = {
+                "free": free_memory,
+                "total": total_memory,
+            }
+        except Exception as e:
+            logger.error(f"Could not get VRAM info: {e}")
+            # Return a default/fallback dictionary to avoid downstream errors
+            _VRAM_INFO = {"free": 0, "total": 0}
+    return _VRAM_INFO
+
+def is_vram_info_initialized():
+    return _VRAM_INFO is not None
+
+def reset_vram_info():
+    global _VRAM_INFO
+    _VRAM_INFO = None
+
+def get_vram_info():
+    return get_basic_vram_info()
 
 # Initial VRAM check at module load
-vram_info = get_basic_vram_info()
-if "error" not in vram_info:
-    print(f"📊 Initial VRAM status: {vram_info['free_gb']:.2f}GB free / {vram_info['total_gb']:.2f}GB total")
-else:
-    print(f"⚠️ VRAM check: {vram_info['error']} - SeedVR2 requires an NVIDIA GPU")
+#vram_info = get_basic_vram_info()
+#if "error" not in vram_info:
+#    print(f"📊 Initial VRAM status: {vram_info['free_gb']:.2f}GB free / {vram_info['total_gb']:.2f}GB total")
+#else:
+#    print(f"⚠️ VRAM check: {vram_info['error']} - SeedVR2 requires an NVIDIA GPU")
 
 def get_vram_usage() -> Tuple[float, float, float]:
     """
