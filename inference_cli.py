@@ -129,7 +129,7 @@ def extract_frames_from_video(video_path, skip_first_frames=0, load_cap=None, pr
     # preprend frames if requested (reverse of the first few frames)
     if prepend_frames > 0:
         prepend_frames = min(prepend_frames, len(frames))
-        frames = frames[-prepend_frames:] + frames
+        frames = frames[prepend_frames:0:-1] + frames
 
     # Convert to tensor [T, H, W, C] and cast to Float16 for ComfyUI compatibility
     frames_tensor = torch.from_numpy(np.stack(frames)).to(torch.float16)
